@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { createContextFirstServer } from "@context-first/mcp-server";
+import { createContextFirstServer } from "@xjtlumedia/mcp-server";
 
 async function main() {
   const { server, store } = createContextFirstServer({

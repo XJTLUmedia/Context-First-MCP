@@ -63,12 +63,12 @@ importers:
 
   packages/remote-server:
     dependencies:
-      '@context-first/mcp-server':
-        specifier: workspace:*
-        version: link:../mcp-server
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@3.25.76)
+      '@xjtlumedia/mcp-server':
+        specifier: workspace:*
+        version: link:../mcp-server
     devDependencies:
       '@types/node':
         specifier: ^20.0.0
@@ -85,12 +85,12 @@ importers:
 
   packages/stdio-server:
     dependencies:
-      '@context-first/mcp-server':
-        specifier: workspace:*
-        version: link:../mcp-server
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@3.25.76)
+      '@xjtlumedia/mcp-server':
+        specifier: workspace:*
+        version: link:../mcp-server
     devDependencies:
       '@types/node':
         specifier: ^20.0.0

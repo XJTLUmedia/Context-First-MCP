@@ -31,8 +31,8 @@ jobs:
 
       - run: pnpm test
 
-      - name: Publish @context-first/mcp-server
-        run: pnpm --filter @context-first/mcp-server publish --access public --no-git-checks
+      - name: Publish @xjtlumedia/mcp-server
+        run: pnpm --filter @xjtlumedia/mcp-server publish --access public --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
