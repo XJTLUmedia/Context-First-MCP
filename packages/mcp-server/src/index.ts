@@ -66,6 +66,16 @@ import {
   handleLoop,
   type LoopToolInput,
 } from "./tools/loop.js";
+import {
+  groundingInputSchema,
+  handleGrounding,
+  type GroundingInput,
+} from "./tools/grounding.js";
+import {
+  driftInputSchema,
+  handleDrift,
+  type DriftInput,
+} from "./tools/drift.js";
 
 export { SessionStore } from "./state/store.js";
 export { SiloManager } from "./state/silo.js";
@@ -82,7 +92,7 @@ export interface CreateServerOptions {
 }
 
 /**
- * Create a Context-First MCP server with all 14 tools registered.
+ * Create a Context-First MCP server with all 16 tools registered.
  * Returns the McpServer instance and the SessionStore for lifecycle management.
  */
 export function createContextFirstServer(options: CreateServerOptions = {}) {
@@ -206,12 +216,32 @@ export function createContextFirstServer(options: CreateServerOptions = {}) {
   // ─── Unified Context Loop ───
   server.tool(
     "context_loop",
-    "Run a complete context management cycle in one call. Orchestrates recap, conflict detection, ambiguity checking, entropy monitoring, abstention evaluation, and tool discovery into a unified pipeline. Returns a single action recommendation: proceed, clarify, reset, or abstain.",
+    "Run a complete context management cycle in one call. Orchestrates recap, conflict detection, ambiguity checking, entropy monitoring, abstention evaluation, grounding verification, temporal drift detection, and tool discovery into a unified pipeline. Returns a directive with: action (proceed/clarify/reset/abstain), machine-readable constraints, a context health score (0-1), grounding verdict, drift status, and auto-extracted ground-truth facts. Read the 'directive' field first — it tells you exactly what to do.",
     loopInputSchema.shape,
     async (input: LoopToolInput) => handleLoop(store, catalog, input)
   );
 
-  // ─── Self-Register All 14 Tools in Catalog ───
+  // ─── SGI: Grounding Check (arXiv:2602.13224) ───
+  server.tool(
+    "check_grounding",
+    "Verify whether the assistant's recent output is grounded in stored conversation facts. Uses a Semantic Grounding Index with three dimensions: factual overlap, context adherence, and falsifiability. Returns a grounding score (0-1) and lists ungrounded claims.",
+    groundingInputSchema.shape,
+    async (input: GroundingInput) => ({
+      content: [{ type: "text" as const, text: JSON.stringify(handleGrounding(store, input), null, 2) }],
+    })
+  );
+
+  // ─── TCA: Temporal Drift Detection (arXiv:2503.15560) ───
+  server.tool(
+    "detect_drift",
+    "Track context health over time and detect degradation patterns. Identifies sudden shifts, gradual decay, and oscillation. Records health snapshots per turn and computes a progressive risk score. Risk ≥ 0.7 signals critical drift requiring intervention.",
+    driftInputSchema.shape,
+    async (input: DriftInput) => ({
+      content: [{ type: "text" as const, text: JSON.stringify(handleDrift(input), null, 2) }],
+    })
+  );
+
+  // ─── Self-Register All 16 Tools in Catalog ───
   catalog.registerBatch([
     {
       name: "recap_conversation",
@@ -293,9 +323,21 @@ export function createContextFirstServer(options: CreateServerOptions = {}) {
     },
     {
       name: "context_loop",
-      description: "Run a complete context management cycle in one call. Orchestrates all context tools into a unified pipeline with a single action recommendation.",
+      description: "Run a complete context management cycle in one call. Returns an LLM directive with action, machine-readable constraints, context health score, grounding verdict, drift status, and auto-extracted facts.",
       inputSchema: loopInputSchema.shape,
-      tags: ["loop", "unified", "orchestration", "pipeline", "meta", "context-cycle"],
+      tags: ["loop", "unified", "orchestration", "pipeline", "meta", "context-cycle", "directive", "grounding", "drift"],
+    },
+    {
+      name: "check_grounding",
+      description: "Verify whether assistant output is grounded in stored conversation facts using a Semantic Grounding Index.",
+      inputSchema: groundingInputSchema.shape,
+      tags: ["grounding", "hallucination", "factual", "verification", "sgi"],
+    },
+    {
+      name: "detect_drift",
+      description: "Track context health over time and detect degradation patterns: sudden shifts, gradual decay, oscillation.",
+      inputSchema: driftInputSchema.shape,
+      tags: ["drift", "temporal", "health", "trend", "monitoring", "tca"],
     },
   ]);
 

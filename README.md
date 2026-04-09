@@ -63,12 +63,43 @@ context_loop (single MCP tool call)
 ├── Stage 5: ENTROPY    — Monitor output quality degradation (ERGO)
 ├── Stage 6: ABSTENTION — Multi-dimensional confidence check (RLAAR)
 ├── Stage 7: DISCOVERY  — Suggest relevant next tools (MCP-Zero)
-└── Stage 8: SYNTHESIS   — Combine signals → action recommendation
+└── Stage 8: SYNTHESIS   — Combine signals → action recommendation + LLM directive
 ```
 
 **Synthesis Priority:** `abstain` > `reset` > `clarify` > `proceed`
 
 Each stage runs with independent error isolation — a failure in one stage doesn't block the others. The result includes per-stage timing, status, and detailed results for observability.
+
+#### LLM Directive (NEW)
+
+The `context_loop` response includes a top-level `directive` object designed for LLM consumption — a compact, actionable instruction that replaces the need to parse nested stage results:
+
+```json
+{
+  "directive": {
+    "action": "clarify",
+    "instruction": "Before proceeding, resolve these issues with the user:\n1. Could you specify exactly what you mean?\n2. Is this a firm requirement or still open for discussion?",
+    "questions": ["Could you specify exactly what you mean?", "Is this a firm requirement?"],
+    "contextHealth": 0.62,
+    "autoExtractedFacts": { "framework": "React", "deploy_to": "Vercel" },
+    "suggestedNextTools": ["verify_execution", "quarantine_context"]
+  }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `action` | What to do: `proceed`, `clarify`, `reset`, or `abstain` |
+| `instruction` | Plain-language guidance for the LLM's next step |
+| `questions` | Aggregated clarifying questions from all stages (ambiguity + abstention + conflicts) |
+| `contextHealth` | 0-1 composite score. 1 = healthy, 0 = degraded |
+| `autoExtractedFacts` | Key-value facts auto-extracted from user messages and stored as ground truth |
+| `suggestedNextTools` | External tools the LLM should consider (excludes tools already run in the loop) |
+
+**Smart defaults:**
+- `currentInput` is auto-inferred from the last user message if not provided
+- Ground-truth facts are auto-extracted from user messages (e.g., "use React" → `{"use_react": "React"}`)
+- Discovery results exclude context-loop internal tools to avoid circular suggestions
 
 ## Research Foundations
 
