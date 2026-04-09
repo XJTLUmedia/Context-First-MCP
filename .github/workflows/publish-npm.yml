@@ -31,12 +31,12 @@ jobs:
 
       - run: pnpm test
 
-      - name: Publish @xjtlumedia/mcp-server
-        run: pnpm --filter @xjtlumedia/mcp-server publish --access public --no-git-checks
+      - name: Publish @xjtlumedia/context-first-mcp-server
+        run: pnpm --filter @xjtlumedia/context-first-mcp-server publish --access public --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Publish context-first-mcp
-        run: pnpm --filter context-first-mcp publish --access public --no-git-checks
+      - name: Publish @xjtlumedia/context-first-mcp
+        run: pnpm --filter @xjtlumedia/context-first-mcp publish --access public --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

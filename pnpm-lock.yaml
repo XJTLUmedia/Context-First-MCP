@@ -66,7 +66,7 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@3.25.76)
-      '@xjtlumedia/mcp-server':
+      '@xjtlumedia/context-first-mcp-server':
         specifier: workspace:*
         version: link:../mcp-server
     devDependencies:
@@ -88,7 +88,7 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@3.25.76)
-      '@xjtlumedia/mcp-server':
+      '@xjtlumedia/context-first-mcp-server':
         specifier: workspace:*
         version: link:../mcp-server
     devDependencies:

@@ -1,5 +1,5 @@
 {
-  "name": "@xjtlumedia/remote-server",
+  "name": "@xjtlumedia/context-first-remote-server",
   "version": "1.0.0",
   "description": "Context Custodian MCP server — Vercel Streamable HTTP deployment",
   "license": "MIT",
@@ -12,7 +12,7 @@
     "clean": "rm -rf dist .vercel"
   },
   "dependencies": {
-    "@xjtlumedia/mcp-server": "workspace:*",
+    "@xjtlumedia/context-first-mcp-server": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "devDependencies": {

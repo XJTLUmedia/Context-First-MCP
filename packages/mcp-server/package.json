@@ -1,5 +1,5 @@
 {
-  "name": "@xjtlumedia/mcp-server",
+  "name": "@xjtlumedia/context-first-mcp-server",
   "version": "1.0.0",
   "description": "Core MCP server library — tools, state engine, and analysis for context-first conversation management",
   "license": "MIT",
