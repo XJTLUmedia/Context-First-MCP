@@ -6,7 +6,7 @@
 [![Smithery](https://img.shields.io/badge/Smithery-listed-orange)](https://smithery.ai)
 [![Glama](https://glama.ai/mcp/servers/badge)](https://glama.ai/mcp/servers)
 
-> A **Context Custodian MCP server** that fights LLM conversation degradation with 13 tools backed by 4 research papers — active tool discovery (MCP-Zero), entropy-guided resetting (ERGO), context quarantining, and verifiable abstention (RLAAR).
+> A **Context Custodian MCP server** that fights LLM conversation degradation with 14 tools backed by 4 research papers — a unified context loop, active tool discovery (MCP-Zero), entropy-guided resetting (ERGO), context quarantining, and verifiable abstention (RLAAR).
 
 ---
 
@@ -21,7 +21,7 @@ Every long AI conversation suffers from four structural gaps:
 | **Calibration & Trust** | AI proceeds on vague, underspecified requirements instead of asking questions |
 | **Benchmark vs Reality** | Tool outputs look successful but didn't actually achieve the goal |
 
-## The Solution: 13 MCP Tools
+## The Solution: 14 MCP Tools
 
 ### Layer 1: Core Context Management (8 tools)
 
@@ -45,6 +45,30 @@ Every long AI conversation suffers from four structural gaps:
 | `merge_quarantine` | Multi-Agent Quarantine | Merge silo results back with noise filtering, only promoted keys return | Architecture pattern |
 | `entropy_monitor` | ERGO | Proxy entropy metrics detect confusion spikes via lexical diversity, contradiction density, hedge-word frequency, repetition. Triggers adaptive reset | [arXiv:2510.14077](https://arxiv.org/abs/2510.14077) |
 | `abstention_check` | RLAAR | Evaluates if model has sufficient verified info to proceed. 5-dimension confidence scoring. Abstains with questions rather than hallucinating | [arXiv:2510.18731](https://arxiv.org/abs/2510.18731) |
+
+### Layer 3: Unified Orchestration (1 tool)
+
+| Tool | Description |
+|------|-------------|
+| `context_loop` | **One call to rule them all.** Runs a complete context management cycle — ingest → recap → conflict detection → ambiguity check → entropy monitoring → abstention evaluation → tool discovery — and returns a single action recommendation: `proceed`, `clarify`, `reset`, or `abstain`. Replaces 6-7 individual tool calls with a unified pipeline. Works identically on local (stdio) and remote (HTTP) transports. |
+
+#### context_loop Pipeline
+
+```
+context_loop (single MCP tool call)
+├── Stage 1: INGEST     — Store messages to session history
+├── Stage 2: RECAP      — Extract intents, decisions, summaries
+├── Stage 3: CONFLICT   — Detect contradictions against ground truth
+├── Stage 4: AMBIGUITY  — Check for underspecified requirements
+├── Stage 5: ENTROPY    — Monitor output quality degradation (ERGO)
+├── Stage 6: ABSTENTION — Multi-dimensional confidence check (RLAAR)
+├── Stage 7: DISCOVERY  — Suggest relevant next tools (MCP-Zero)
+└── Stage 8: SYNTHESIS   — Combine signals → action recommendation
+```
+
+**Synthesis Priority:** `abstain` > `reset` > `clarify` > `proceed`
+
+Each stage runs with independent error isolation — a failure in one stage doesn't block the others. The result includes per-stage timing, status, and detailed results for observability.
 
 ## Research Foundations
 
@@ -147,6 +171,7 @@ Deploy your own instance:
 │                                                          │
 │  Layer 1: Tools (recap, conflict, ambiguity, verify)     │
 │  Layer 2: Tools (discover, quarantine, entropy, abstain) │
+│  Layer 3: Unified Loop (context_loop orchestration)      │
 │  State + Silos + Engine + Registry                       │
 └──────────┬──────────────────────┬────────────────────────┘
            │                      │
@@ -155,16 +180,16 @@ Deploy your own instance:
     │ (npx local)  │        │ (Vercel)    │
     │ Transport:   │        │ Transport:  │
     │   stdio      │        │ Streamable  │
-    │ ALL 13 tools │        │ HTTP        │
-    └──────────────┘        │ ALL 13 tools│
+    │ ALL 14 tools │        │ HTTP        │
+    └──────────────┘        │ ALL 14 tools│
                             └─────────────┘
 ```
 
-**Core Library** (`@xjtlumedia/context-first-mcp-server`): All 13 tool implementations, state management, memory silos, entropy engine, tool registry, and abstention scoring. Zero external API keys required — heuristic-based analysis by default.
+**Core Library** (`@xjtlumedia/context-first-mcp-server`): All 14 tool implementations, state management, memory silos, entropy engine, tool registry, unified loop orchestration, and abstention scoring. Zero external API keys required — heuristic-based analysis by default.
 
-**stdio-server** (`context-first-mcp`): npx entry point for local use. Uses stdio transport per MCP spec. Exposes all 13 tools.
+**stdio-server** (`context-first-mcp`): npx entry point for local use. Uses stdio transport per MCP spec. Exposes all 14 tools.
 
-**remote-server**: Vercel serverless function with Streamable HTTP transport. Session state in lambda memory. Exposes all 13 tools.
+**remote-server**: Vercel serverless function with Streamable HTTP transport. Session state in lambda memory. Exposes all 14 tools.
 
 ## Frontend Demo
 

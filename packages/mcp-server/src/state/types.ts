@@ -138,3 +138,40 @@ export interface AbstentionResult {
   missingInfo: string[];
   suggestedQuestions: string[];
 }
+
+// ─── Unified Context Loop Types ───
+
+export interface UnifiedLoopStage {
+  name: string;
+  status: "completed" | "skipped" | "error";
+  durationMs: number;
+  result: unknown;
+}
+
+export interface UnifiedLoopResult {
+  sessionId: string;
+  action: "proceed" | "clarify" | "reset" | "abstain";
+  summary: string;
+  stages: UnifiedLoopStage[];
+  recap: {
+    summary: string;
+    hiddenIntents: string[];
+    keyDecisions: string[];
+  } | null;
+  conflicts: ConflictDetectionResult | null;
+  ambiguity: AmbiguityResult | null;
+  entropy: {
+    metrics: EntropyMetrics;
+    spikeDetected: boolean;
+    recommendation: string;
+  } | null;
+  abstention: {
+    shouldAbstain: boolean;
+    confidence: number;
+    suggestedQuestions: string[];
+  } | null;
+  discovery: {
+    suggestedTools: Array<{ toolName: string; relevanceScore: number }>;
+  } | null;
+  timestamp: Date;
+}

@@ -61,6 +61,11 @@ import {
   handleAbstention,
   type AbstentionInput,
 } from "./tools/abstention.js";
+import {
+  loopInputSchema,
+  handleLoop,
+  type LoopToolInput,
+} from "./tools/loop.js";
 
 export { SessionStore } from "./state/store.js";
 export { SiloManager } from "./state/silo.js";
@@ -77,7 +82,7 @@ export interface CreateServerOptions {
 }
 
 /**
- * Create a Context-First MCP server with all 13 tools registered.
+ * Create a Context-First MCP server with all 14 tools registered.
  * Returns the McpServer instance and the SessionStore for lifecycle management.
  */
 export function createContextFirstServer(options: CreateServerOptions = {}) {
@@ -198,7 +203,15 @@ export function createContextFirstServer(options: CreateServerOptions = {}) {
     async (input: AbstentionInput) => handleAbstention(store, input)
   );
 
-  // ─── Self-Register All 13 Tools in Catalog ───
+  // ─── Unified Context Loop ───
+  server.tool(
+    "context_loop",
+    "Run a complete context management cycle in one call. Orchestrates recap, conflict detection, ambiguity checking, entropy monitoring, abstention evaluation, and tool discovery into a unified pipeline. Returns a single action recommendation: proceed, clarify, reset, or abstain.",
+    loopInputSchema.shape,
+    async (input: LoopToolInput) => handleLoop(store, catalog, input)
+  );
+
+  // ─── Self-Register All 14 Tools in Catalog ───
   catalog.registerBatch([
     {
       name: "recap_conversation",
@@ -277,6 +290,12 @@ export function createContextFirstServer(options: CreateServerOptions = {}) {
       description: "Evaluate confidence across 5 dimensions to decide if the system should abstain from answering.",
       inputSchema: abstentionInputSchema.shape,
       tags: ["abstention", "confidence", "rlaar", "trust", "calibration"],
+    },
+    {
+      name: "context_loop",
+      description: "Run a complete context management cycle in one call. Orchestrates all context tools into a unified pipeline with a single action recommendation.",
+      inputSchema: loopInputSchema.shape,
+      tags: ["loop", "unified", "orchestration", "pipeline", "meta", "context-cycle"],
     },
   ]);
 

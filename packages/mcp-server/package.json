@@ -1,6 +1,6 @@
 {
   "name": "@xjtlumedia/context-first-mcp-server",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Core MCP server library — tools, state engine, and analysis for context-first conversation management",
   "license": "MIT",
   "type": "module",
@@ -36,5 +36,5 @@
     "url": "https://github.com/context-first/mcp",
     "directory": "packages/mcp-server"
   },
-  "keywords": ["mcp", "model-context-protocol", "context", "llm", "conversation", "state"]
+  "keywords": ["mcp", "model-context-protocol", "context", "llm", "conversation", "state", "orchestration", "unified-loop"]
 }

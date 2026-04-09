@@ -55,9 +55,9 @@ export default function Home() {
         </h1>
         <p className="text-xl text-gray-600 dark:text-gray-400 max-w-2xl mx-auto mb-8">
           A <strong>Context Custodian</strong> MCP server with{" "}
-          <strong>13 tools</strong> that keeps your AI conversations on track —
+          <strong>14 tools</strong> that keeps your AI conversations on track —
           from recap and conflict detection to entropy monitoring, context
-          quarantine, and verifiable abstention.
+          quarantine, verifiable abstention, and unified orchestration loop.
         </p>
         <div className="flex gap-4 justify-center flex-wrap">
           <a

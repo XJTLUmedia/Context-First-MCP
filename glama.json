@@ -1,9 +1,9 @@
 {
   "name": "context-first-mcp",
-  "description": "Context Custodian MCP server — fight LLM context degradation with recap, conflict detection, ambiguity checking, execution verification, active tool discovery (MCP-Zero), entropy-guided resetting (ERGO), multi-agent context quarantining, and verifiable abstention (RLAAR)",
+  "description": "Context Custodian MCP server — fight LLM context degradation with recap, conflict detection, ambiguity checking, execution verification, active tool discovery (MCP-Zero), entropy-guided resetting (ERGO), multi-agent context quarantining, verifiable abstention (RLAAR), and unified orchestration loop",
   "category": "knowledge-and-memory",
-  "tags": ["context", "conversation", "state-management", "conflict-detection", "recap", "ambiguity", "tool-discovery", "entropy", "quarantine", "abstention", "mcp-zero", "ergo", "multi-agent"],
-  "tools": 13,
+  "tags": ["context", "conversation", "state-management", "conflict-detection", "recap", "ambiguity", "tool-discovery", "entropy", "quarantine", "abstention", "mcp-zero", "ergo", "multi-agent", "unified-loop", "orchestration"],
+  "tools": 14,
   "transport": ["stdio", "streamable-http"],
   "platforms": ["windows", "macos", "linux"],
   "license": "MIT",
