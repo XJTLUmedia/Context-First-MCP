@@ -1,0 +1,27 @@
+{
+  "name": "@context-first/remote-server",
+  "version": "1.0.0",
+  "description": "Context Custodian MCP server — Vercel Streamable HTTP deployment",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "dev": "vercel dev",
+    "deploy": "vercel --prod",
+    "clean": "rm -rf dist .vercel"
+  },
+  "dependencies": {
+    "@context-first/mcp-server": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@vercel/node": "^4.0.0",
+    "typescript": "^5.5.0",
+    "vercel": "^39.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "context-first-mcp-monorepo",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Context Custodian MCP — fight LLM context degradation",
+  "license": "MIT",
+  "scripts": {
+    "build": "pnpm --filter @context-first/mcp-server build && pnpm --filter context-first-mcp build && pnpm --filter @context-first/remote-server build && pnpm --filter @context-first/frontend build",
+    "build:lib": "pnpm --filter @context-first/mcp-server build",
+    "build:stdio": "pnpm --filter context-first-mcp build",
+    "build:remote": "pnpm --filter @context-first/remote-server build",
+    "build:frontend": "pnpm --filter @context-first/frontend build",
+    "dev": "pnpm -r run dev",
+    "test": "pnpm -r run test",
+    "lint": "pnpm -r run lint",
+    "clean": "pnpm -r run clean"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
+}

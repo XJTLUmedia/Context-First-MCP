@@ -1,0 +1,40 @@
+{
+  "name": "@context-first/mcp-server",
+  "version": "1.0.0",
+  "description": "Core MCP server library — tools, state engine, and analysis for context-first conversation management",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/context-first/mcp",
+    "directory": "packages/mcp-server"
+  },
+  "keywords": ["mcp", "model-context-protocol", "context", "llm", "conversation", "state"]
+}
