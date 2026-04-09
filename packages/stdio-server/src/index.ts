@@ -6,7 +6,7 @@ import { createContextFirstServer } from "@xjtlumedia/context-first-mcp-server";
 async function main() {
   const { server, store } = createContextFirstServer({
     name: "context-first-mcp",
-    version: "1.0.3",
+    version: "1.0.4",
   });
 
   const transport = new StdioServerTransport();

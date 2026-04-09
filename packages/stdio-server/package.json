@@ -1,6 +1,6 @@
 {
   "name": "context-first-mcp",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Context Custodian MCP server — npx entry point for local stdio transport",
   "license": "MIT",
   "type": "module",
@@ -17,7 +17,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@xjtlumedia/context-first-mcp-server": "workspace:*",
+    "@xjtlumedia/context-first-mcp-server": "^1.0.0",
     "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "devDependencies": {
