@@ -1,13 +1,15 @@
 {
-  "name": "@xjtlumedia/context-first-mcp",
-  "version": "1.0.0",
+  "name": "context-first-mcp",
+  "version": "1.0.3",
   "description": "Context Custodian MCP server — npx entry point for local stdio transport",
   "license": "MIT",
   "type": "module",
   "bin": {
-    "context-first-mcp": "./dist/index.js"
+    "context-first-mcp": "dist/index.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
@@ -27,9 +29,16 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/context-first/mcp",
+    "url": "git+https://github.com/context-first/mcp.git",
     "directory": "packages/stdio-server"
   },
   "homepage": "https://context-first-mcp.vercel.app",
-  "keywords": ["mcp", "model-context-protocol", "context", "llm", "stdio", "npx"]
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "context",
+    "llm",
+    "stdio",
+    "npx"
+  ]
 }

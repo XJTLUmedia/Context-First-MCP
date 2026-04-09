@@ -142,7 +142,7 @@ Deploy your own instance:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│              @context-first/mcp-server                   │
+│        @xjtlumedia/context-first-mcp-server               │
 │              (Core — shared logic)                        │
 │                                                          │
 │  Layer 1: Tools (recap, conflict, ambiguity, verify)     │
@@ -160,7 +160,7 @@ Deploy your own instance:
                             └─────────────┘
 ```
 
-**Core Library** (`@context-first/mcp-server`): All 13 tool implementations, state management, memory silos, entropy engine, tool registry, and abstention scoring. Zero external API keys required — heuristic-based analysis by default.
+**Core Library** (`@xjtlumedia/context-first-mcp-server`): All 13 tool implementations, state management, memory silos, entropy engine, tool registry, and abstention scoring. Zero external API keys required — heuristic-based analysis by default.
 
 **stdio-server** (`context-first-mcp`): npx entry point for local use. Uses stdio transport per MCP spec. Exposes all 13 tools.
 

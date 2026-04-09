@@ -36,7 +36,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Publish @xjtlumedia/context-first-mcp
-        run: pnpm --filter @xjtlumedia/context-first-mcp publish --access public --no-git-checks
+      - name: Publish context-first-mcp
+        run: pnpm --filter context-first-mcp publish --access public --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

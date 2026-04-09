@@ -235,7 +235,7 @@ export default function DocsPage() {
         <h2 className="text-2xl font-bold mb-4">Architecture</h2>
         <pre className="bg-gray-900 text-gray-300 rounded-lg p-4 text-sm overflow-x-auto mb-6">
 {`┌─────────────────────────────────────────────────────────────┐
-│              @context-first/mcp-server                      │
+│        @xjtlumedia/context-first-mcp-server                 │
 │                                                             │
 │  Layer 1 (Core)              Layer 2 (Research-Backed)      │
 │  ─────────────               ──────────────────────         │
