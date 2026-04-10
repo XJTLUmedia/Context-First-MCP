@@ -1,3 +1,4 @@
+import natural from "natural";
 import type { ToolCatalog } from "../registry/catalog.js";
 import type { DiscoveryResult } from "../state/types.js";
 
@@ -37,6 +38,12 @@ export function discoverTools(
       for (const token of queryTokens) {
         if (tagLower.includes(token) || token.includes(tagLower)) {
           boost += 0.15;
+        } else {
+          // Fuzzy match via Jaro-Winkler (catches near-misses like "dedup" → "deduplicate")
+          const jwSim = natural.JaroWinklerDistance(token, tagLower);
+          if (jwSim > 0.85) {
+            boost += 0.12 * jwSim;
+          }
         }
       }
     }

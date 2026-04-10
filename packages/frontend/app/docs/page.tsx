@@ -1,3 +1,8 @@
+"use client";
+
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
+
 export default function DocsPage() {
   return (
     <div className="max-w-4xl mx-auto px-6 py-12">
@@ -28,21 +33,21 @@ export default function DocsPage() {
         <div className="space-y-4">
           <div>
             <h3 className="font-bold mb-2">Option 1: npx (recommended)</h3>
-            <pre className="bg-gray-900 text-green-400 rounded-lg p-4 text-sm">
-              npx context-first-mcp
-            </pre>
+            <SyntaxHighlighter language="bash" style={vscDarkPlus} customStyle={{ borderRadius: "0.5rem" }}>
+              {"npx context-first-mcp"}
+            </SyntaxHighlighter>
           </div>
           <div>
             <h3 className="font-bold mb-2">Option 2: Global install</h3>
-            <pre className="bg-gray-900 text-green-400 rounded-lg p-4 text-sm">
-              npm install -g context-first-mcp
-            </pre>
+            <SyntaxHighlighter language="bash" style={vscDarkPlus} customStyle={{ borderRadius: "0.5rem" }}>
+              {"npm install -g context-first-mcp"}
+            </SyntaxHighlighter>
           </div>
           <div>
             <h3 className="font-bold mb-2">Option 3: Remote endpoint</h3>
-            <pre className="bg-gray-900 text-green-400 rounded-lg p-4 text-sm">
-              https://context-first-mcp.vercel.app/api/mcp
-            </pre>
+            <SyntaxHighlighter language="text" style={vscDarkPlus} customStyle={{ borderRadius: "0.5rem" }}>
+              {"https://context-first-mcp.vercel.app/api/mcp"}
+            </SyntaxHighlighter>
           </div>
         </div>
       </section>
@@ -233,7 +238,7 @@ export default function DocsPage() {
       {/* Architecture */}
       <section className="mb-12">
         <h2 className="text-2xl font-bold mb-4">Architecture</h2>
-        <pre className="bg-gray-900 text-gray-300 rounded-lg p-4 text-sm overflow-x-auto mb-6">
+        <SyntaxHighlighter language="text" style={vscDarkPlus} customStyle={{ borderRadius: "0.5rem", marginBottom: "1.5rem" }}>
 {`┌─────────────────────────────────────────────────────────────┐
 │        @xjtlumedia/context-first-mcp-server                 │
 │                                                             │
@@ -256,7 +261,7 @@ export default function DocsPage() {
     │   stdio      │        │ Streamable  │
     │              │        │    HTTP     │
     └──────────────┘        └─────────────┘`}
-        </pre>
+        </SyntaxHighlighter>
       </section>
     </div>
   );

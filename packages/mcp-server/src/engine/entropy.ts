@@ -1,4 +1,7 @@
+import natural from "natural";
 import type { GroundTruthEntry, HistoryEntry, EntropyMetrics } from "../state/types.js";
+
+const tokenizer = new natural.WordTokenizer();
 
 const HEDGE_PHRASES = [
   "maybe",
@@ -172,10 +175,7 @@ function computeRepetitionScore(
 // ─── Utilities ───
 
 function tokenize(text: string): string[] {
-  return text
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((w) => w.length > 0);
+  return tokenizer.tokenize(text.toLowerCase()) ?? [];
 }
 
 function splitSentences(text: string): string[] {
@@ -187,11 +187,8 @@ function splitSentences(text: string): string[] {
 
 function computeNgrams(text: string, n: number): Set<string> {
   const tokens = tokenize(text);
-  const ngrams = new Set<string>();
-  for (let i = 0; i <= tokens.length - n; i++) {
-    ngrams.add(tokens.slice(i, i + n).join(" "));
-  }
-  return ngrams;
+  const ngramArrays = natural.NGrams.ngrams(tokens, n);
+  return new Set(ngramArrays.map((g: string[]) => g.join(" ")));
 }
 
 function escapeRegex(str: string): string {

@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 interface ConfigOption {
   label: string;
@@ -104,9 +106,13 @@ export function ConfigGenerator() {
           ))}
         </div>
         <div className="relative">
-          <pre className="bg-gray-900 text-gray-100 rounded-lg p-4 text-sm overflow-x-auto">
+          <SyntaxHighlighter
+            language="json"
+            style={vscDarkPlus}
+            customStyle={{ borderRadius: "0.5rem", fontSize: "0.875rem", margin: 0 }}
+          >
             {configs[selected]}
-          </pre>
+          </SyntaxHighlighter>
           <button
             onClick={handleCopy}
             className="absolute top-2 right-2 px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-200 rounded transition-colors"

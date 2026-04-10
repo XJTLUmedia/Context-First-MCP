@@ -55,9 +55,10 @@ export default function Home() {
         </h1>
         <p className="text-xl text-gray-600 dark:text-gray-400 max-w-2xl mx-auto mb-8">
           A <strong>Context Custodian</strong> MCP server with{" "}
-          <strong>14 tools</strong> that keeps your AI conversations on track —
+          <strong>34 tools</strong> that keeps your AI conversations on track —
           from recap and conflict detection to entropy monitoring, context
-          quarantine, verifiable abstention, and unified orchestration loop.
+          quarantine, verifiable abstention, advanced reasoning paradigms,
+          and hallucination detection with self-verification.
         </p>
         <div className="flex gap-4 justify-center flex-wrap">
           <a
@@ -140,6 +141,62 @@ export default function Home() {
             gap="Verifiable Abstention (RLAAR)"
             description="Evaluates whether the model has enough verified info to proceed. Abstains with clarifying questions rather than hallucinating."
             color="red"
+          />
+        </div>
+      </section>
+
+      {/* Layer 5 — Truthfulness & Self-Verification */}
+      <section className="mb-20">
+        <h2 className="text-3xl font-bold mb-4 text-center">
+          Truthfulness &amp; Self-Verification
+        </h2>
+        <p className="text-gray-600 dark:text-gray-400 text-center mb-10 max-w-2xl mx-auto">
+          7 research-backed tools for hallucination detection. Layer 5 brings internal
+          state probing, truth direction analysis, neighborhood consistency, logical
+          verification, verify-first checking, IoE self-correction, and iterative self-critique.
+        </p>
+        <div className="grid md:grid-cols-2 gap-6">
+          <ToolCard
+            name="probe_internal_state"
+            gap="Internal State Probing"
+            description="5 proxy activation signals detect likely false claims without model internals. Classifies each claim as likely_true, uncertain, or likely_false."
+            color="blue"
+          />
+          <ToolCard
+            name="detect_truth_direction"
+            gap="Truth Direction Detection"
+            description="4-feature truth vector analysis flags deviant claims that diverge significantly from population baselines."
+            color="purple"
+          />
+          <ToolCard
+            name="ncb_check"
+            gap="Neighborhood Consistency (NCB)"
+            description="5 perturbation types test whether knowledge is genuine or surface-level pattern matching. Returns robust/brittle/mixed verdict."
+            color="green"
+          />
+          <ToolCard
+            name="check_logical_consistency"
+            gap="Logical Consistency"
+            description="Applies contrapositive, negation, generalization, specialization, and transitive checks to verify structural soundness."
+            color="amber"
+          />
+          <ToolCard
+            name="verify_first"
+            gap="Verify-First Check"
+            description="5-dimension verification: factual accuracy, internal consistency, source verifiability, logical soundness, and completeness."
+            color="red"
+          />
+          <ToolCard
+            name="ioe_self_correct"
+            gap="IoE Self-Correction"
+            description="5-metric confidence evaluation with conditional self-correction. Accepts, corrects, or escalates based on calibrated thresholds."
+            color="indigo"
+          />
+          <ToolCard
+            name="self_critique"
+            gap="Iterative Self-Critique"
+            description="Multi-round critique-improve loop that converges toward quality. Tracks score progression and stops when improvements plateau."
+            color="blue"
           />
         </div>
       </section>

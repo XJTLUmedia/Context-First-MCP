@@ -1,3 +1,4 @@
+import { linearRegression, variance } from "simple-statistics";
 import type { DriftResult, DriftWindow } from "../state/types.js";
 
 /**
@@ -73,13 +74,15 @@ export function detectDrift(
     : 0;
   const hasSuddenShift = suddenDrop > SUDDEN_SHIFT_THRESHOLD;
 
-  // ─── 2. Gradual Decay Detection (linear regression slope) ───
-  const slope = computeSlope(healthValues);
+  // ─── 2. Gradual Decay Detection (linear regression slope via simple-statistics) ───
+  const slope = healthValues.length >= 2
+    ? linearRegression(healthValues.map((v, i) => [i, v])).m
+    : 0;
   const hasGradualDecay = slope < DECAY_SLOPE_THRESHOLD && healthValues.length >= 3;
 
-  // ─── 3. Oscillation Detection (variance-based) ───
-  const variance = computeVariance(healthValues);
-  const hasOscillation = variance > OSCILLATION_THRESHOLD && healthValues.length >= 4;
+  // ─── 3. Oscillation Detection (variance via simple-statistics) ───
+  const driftVariance = healthValues.length >= 2 ? variance(healthValues) : 0;
+  const hasOscillation = driftVariance > OSCILLATION_THRESHOLD && healthValues.length >= 4;
 
   // ─── Determine drift type and severity ───
   let driftType: DriftResult["driftType"] = "none";
@@ -101,7 +104,7 @@ export function detectDrift(
       "Context is gradually degrading. Consider running context_loop to refresh state, or clear stale ground truth entries.";
   } else if (hasOscillation) {
     driftType = "oscillation";
-    severity = Math.min(1, variance / 0.5);
+    severity = Math.min(1, driftVariance / 0.5);
     trend = "unstable";
     recommendation =
       "Context health is oscillating — likely conflicting inputs or ambiguous requirements. Resolve open conflicts before proceeding.";
@@ -158,34 +161,6 @@ export function clearDriftHistory(sessionId: string): void {
 }
 
 // ─── Math Utilities ───
-
-function computeSlope(values: number[]): number {
-  const n = values.length;
-  if (n < 2) return 0;
-
-  // Simple linear regression: y = mx + b
-  let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
-  for (let i = 0; i < n; i++) {
-    sumX += i;
-    sumY += values[i];
-    sumXY += i * values[i];
-    sumX2 += i * i;
-  }
-
-  const denominator = n * sumX2 - sumX * sumX;
-  if (denominator === 0) return 0;
-
-  return (n * sumXY - sumX * sumY) / denominator;
-}
-
-function computeVariance(values: number[]): number {
-  if (values.length < 2) return 0;
-
-  const mean = values.reduce((a, b) => a + b, 0) / values.length;
-  const sumSquaredDiffs = values.reduce((sum, v) => sum + (v - mean) ** 2, 0);
-
-  return sumSquaredDiffs / values.length;
-}
 
 function round(n: number): number {
   return Math.round(n * 100) / 100;

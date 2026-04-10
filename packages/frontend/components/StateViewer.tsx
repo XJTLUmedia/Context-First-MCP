@@ -1,5 +1,8 @@
 "use client";
 
+import JsonView from "react18-json-view";
+import "react18-json-view/src/style.css";
+
 interface StateEntry {
   value: unknown;
   lockedAt: string;
@@ -62,11 +65,13 @@ export function StateViewer({ entries, conflicts = [] }: StateViewerProps) {
                   </div>
                   <span className="text-xs text-gray-500">{entry.source}</span>
                 </div>
-                <pre className="text-xs mt-1 text-gray-700 dark:text-gray-300 whitespace-pre-wrap">
-                  {typeof entry.value === "string"
-                    ? entry.value
-                    : JSON.stringify(entry.value, null, 2)}
-                </pre>
+                <div className="text-xs mt-1">
+                  {typeof entry.value === "string" || typeof entry.value === "number" || typeof entry.value === "boolean" ? (
+                    <span className="text-gray-700 dark:text-gray-300 font-mono whitespace-pre-wrap">{String(entry.value)}</span>
+                  ) : (
+                    <JsonView src={entry.value as object} collapsed={1} />
+                  )}
+                </div>
                 <span className="text-xs text-gray-400">
                   Locked: {new Date(entry.lockedAt).toLocaleString()}
                 </span>

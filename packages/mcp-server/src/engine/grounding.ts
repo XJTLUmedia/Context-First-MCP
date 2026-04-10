@@ -1,5 +1,7 @@
+import natural from "natural";
 import type { GroundTruthEntry, GroundingResult } from "../state/types.js";
-import { tokenize as indexerTokenize } from "../registry/indexer.js";
+
+const wordTokenizer = new natural.WordTokenizer();
 
 /**
  * Semantic Grounding Index (SGI) — inspired by arXiv:2602.13224.
@@ -100,8 +102,8 @@ function computeFactualGrounding(
 
     checkedCount++;
 
-    // Check if the value is consistent
-    const valueTokens = indexerTokenize(valueStr);
+    // Use natural WordTokenizer for better token coverage
+    const valueTokens = wordTokenizer.tokenize(valueStr) ?? [];
     const matchedTokens = valueTokens.filter(t => textLower.includes(t));
     const alignment = valueTokens.length > 0
       ? matchedTokens.length / valueTokens.length
@@ -129,13 +131,13 @@ function computeContextAdherence(
   // Build a "context envelope" from all ground truth keys and values
   const contextTokens = new Set<string>();
   for (const [key, entry] of groundTruth) {
-    for (const token of indexerTokenize(key)) contextTokens.add(token);
-    for (const token of indexerTokenize(String(entry.value))) contextTokens.add(token);
+    for (const token of (wordTokenizer.tokenize(key) ?? [])) contextTokens.add(token);
+    for (const token of (wordTokenizer.tokenize(String(entry.value)) ?? [])) contextTokens.add(token);
   }
 
   if (contextTokens.size === 0) return 1.0;
 
-  const textTokens = indexerTokenize(text);
+  const textTokens = wordTokenizer.tokenize(text) ?? [];
   if (textTokens.length === 0) return 0;
 
   // What fraction of the response's content tokens overlap with the context envelope?

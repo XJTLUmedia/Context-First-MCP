@@ -1,6 +1,17 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState } from "react";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ReferenceLine,
+  ResponsiveContainer,
+} from "recharts";
 
 interface TurnData {
   turn: number;
@@ -65,39 +76,6 @@ export default function EntropyChart() {
     return initial;
   });
 
-  const chartWidth = 600;
-  const chartHeight = 250;
-  const paddingX = 40;
-  const paddingY = 20;
-  const plotWidth = chartWidth - paddingX * 2;
-  const plotHeight = chartHeight - paddingY * 2;
-
-  const maxTurn = Math.max(turns.length, 10);
-
-  const toX = useCallback(
-    (turn: number) => paddingX + ((turn - 1) / (maxTurn - 1)) * plotWidth,
-    [maxTurn, paddingX, plotWidth]
-  );
-  const toY = useCallback(
-    (value: number) => paddingY + (1 - value) * plotHeight,
-    [paddingY, plotHeight]
-  );
-
-  const pathD = turns
-    .map((t, i) => `${i === 0 ? "M" : "L"} ${toX(t.turn)} ${toY(t.composite)}`)
-    .join(" ");
-
-  // Build colored segments
-  const segments: Array<{ d: string; color: string }> = [];
-  for (let i = 0; i < turns.length - 1; i++) {
-    const x1 = toX(turns[i].turn);
-    const y1 = toY(turns[i].composite);
-    const x2 = toX(turns[i + 1].turn);
-    const y2 = toY(turns[i + 1].composite);
-    const avgVal = (turns[i].composite + turns[i + 1].composite) / 2;
-    segments.push({ d: `M ${x1} ${y1} L ${x2} ${y2}`, color: getColor(avgVal) });
-  }
-
   const addTurn = () => {
     setTurns((prev) => [...prev, generateTurnData(prev.length + 1)]);
   };
@@ -138,102 +116,59 @@ export default function EntropyChart() {
         </div>
       </div>
 
-      {/* SVG Chart */}
-      <div className="overflow-x-auto mb-4">
-        <svg
-          viewBox={`0 0 ${chartWidth} ${chartHeight}`}
-          className="w-full max-w-[600px]"
-          style={{ minWidth: 400 }}
-        >
-          {/* Grid lines */}
-          {[0, 0.25, 0.5, 0.7, 1].map((v) => (
-            <g key={v}>
-              <line
-                x1={paddingX}
-                y1={toY(v)}
-                x2={chartWidth - paddingX}
-                y2={toY(v)}
-                stroke={v === THRESHOLD ? "#ef4444" : "#e5e7eb"}
-                strokeDasharray={v === THRESHOLD ? "6 3" : "2 4"}
-                strokeWidth={v === THRESHOLD ? 1.5 : 0.5}
-              />
-              <text
-                x={paddingX - 6}
-                y={toY(v) + 3}
-                textAnchor="end"
-                className="fill-gray-400"
-                fontSize={10}
-              >
-                {v}
-              </text>
-            </g>
-          ))}
-
-          {/* Threshold label */}
-          <text
-            x={chartWidth - paddingX + 4}
-            y={toY(THRESHOLD) + 3}
-            className="fill-red-500"
-            fontSize={9}
-            fontWeight="bold"
+      {/* Recharts chart */}
+      <div className="h-64 mb-4">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart
+            data={turns.map((t) => ({
+              name: `T${t.turn}`,
+              composite: t.composite,
+              lexicalDiversity: t.lexicalDiversity,
+              contradictionDensity: t.contradictionDensity,
+              hedgeFrequency: t.hedgeFrequency,
+              repetitionScore: t.repetitionScore,
+              isSpike: t.isSpike,
+            }))}
+            margin={{ top: 10, right: 30, left: 0, bottom: 0 }}
           >
-            threshold
-          </text>
-
-          {/* Colored line segments */}
-          {segments.map((seg, i) => (
-            <path
-              key={i}
-              d={seg.d}
-              fill="none"
-              stroke={seg.color}
-              strokeWidth={2.5}
-              strokeLinecap="round"
+            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+            <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+            <YAxis domain={[0, 1]} tick={{ fontSize: 11 }} />
+            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+            <Tooltip formatter={((v: unknown) => typeof v === "number" ? v.toFixed(3) : String(v)) as any} />
+            <Legend />
+            <ReferenceLine
+              y={THRESHOLD}
+              stroke="#ef4444"
+              strokeDasharray="6 3"
+              label={{ value: "threshold", position: "insideRight", fill: "#ef4444", fontSize: 10 }}
             />
-          ))}
-
-          {/* Data points */}
-          {turns.map((t) => (
-            <g key={t.turn}>
-              <circle
-                cx={toX(t.turn)}
-                cy={toY(t.composite)}
-                r={t.isSpike ? 5 : 3}
-                fill={t.isSpike ? "#ef4444" : getColor(t.composite)}
-                stroke={t.resetAnnotation ? "#fff" : "none"}
-                strokeWidth={t.resetAnnotation ? 2 : 0}
-              />
-              {t.resetAnnotation && (
-                <text
-                  x={toX(t.turn)}
-                  y={toY(t.composite) - 10}
-                  textAnchor="middle"
-                  className="fill-red-500"
-                  fontSize={9}
-                  fontWeight="bold"
-                >
-                  RESET
-                </text>
-              )}
-            </g>
-          ))}
-
-          {/* X-axis turn labels */}
-          {turns
-            .filter((_, i) => i % Math.ceil(turns.length / 10) === 0 || i === turns.length - 1)
-            .map((t) => (
-              <text
-                key={t.turn}
-                x={toX(t.turn)}
-                y={chartHeight - 4}
-                textAnchor="middle"
-                className="fill-gray-400"
-                fontSize={10}
-              >
-                T{t.turn}
-              </text>
-            ))}
-        </svg>
+            <Line
+              type="monotone"
+              dataKey="composite"
+              stroke="#6366f1"
+              strokeWidth={2.5}
+              dot={((props: { cx?: number; cy?: number; payload?: { isSpike: boolean; composite: number; name: string } }) => {
+                const { cx, cy, payload } = props;
+                if (cx == null || cy == null || !payload) return null;
+                return (
+                  <circle
+                    key={`dot-${payload.name}`}
+                    cx={cx}
+                    cy={cy}
+                    r={payload.isSpike ? 5 : 3}
+                    fill={getColor(payload.composite)}
+                  />
+                );
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              }) as any}
+            />
+            <Line type="monotone" dataKey="lexicalDiversity" stroke="#3b82f6" strokeWidth={1} dot={false} />
+            <Line type="monotone" dataKey="contradictionDensity" stroke="#ef4444" strokeWidth={1} dot={false} />
+            <Line type="monotone" dataKey="hedgeFrequency" stroke="#eab308" strokeWidth={1} dot={false} />
+            <Line type="monotone" dataKey="repetitionScore" stroke="#a855f7" strokeWidth={1} dot={false} />
+          </LineChart>
+        </ResponsiveContainer>
       </div>
 
       {/* Sub-metrics legend */}

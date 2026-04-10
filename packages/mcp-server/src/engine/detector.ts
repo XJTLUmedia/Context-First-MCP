@@ -1,24 +1,11 @@
+import { compareTwoStrings } from "string-similarity";
 import type { GroundTruthEntry, ConflictDetectionResult } from "../state/types.js";
 
 /**
  * Heuristic-based conflict detector.
  * Compares new user input against established ground truth.
+ * Uses Dice coefficient (string-similarity) instead of hand-rolled Jaccard.
  */
-
-/** Simple word tokenizer */
-function tokenize(text: string): string[] {
-  return text
-    .toLowerCase()
-    .split(/\W+/)
-    .filter((w) => w.length > 2);
-}
-
-/** Compute Jaccard similarity between two token sets */
-function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
-  const intersection = new Set([...a].filter((x) => b.has(x)));
-  const union = new Set([...a, ...b]);
-  return union.size === 0 ? 0 : intersection.size / union.size;
-}
 
 /** Check if a message contains negation of a concept */
 function containsNegation(text: string, concept: string): boolean {
@@ -55,10 +42,8 @@ function detectValueChange(
 
   // Check if the message mentions the key but with different value
   if (msgLower.includes(keyLower)) {
-    const valueTokens = new Set(tokenize(valueStr));
-    const msgTokens = new Set(tokenize(newMessage));
-    const similarity = jaccardSimilarity(valueTokens, msgTokens);
-    if (similarity < 0.1 && valueTokens.size > 0) {
+    const similarity = compareTwoStrings(valueStr, msgLower);
+    if (similarity < 0.1 && valueStr.length > 0) {
       return {
         isConflict: true,
         severity: "medium",

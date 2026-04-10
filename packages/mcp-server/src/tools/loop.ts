@@ -13,7 +13,7 @@ export const loopInputSchema = z.object({
   currentInput: z.string().optional().describe("Latest user message for conflict & ambiguity analysis. Auto-inferred from last user message if omitted."),
   claim: z.string().optional().describe("Assertion to evaluate for abstention check"),
   discoveryQuery: z.string().optional().describe("Natural language query for tool recommendation"),
-  lookbackTurns: z.number().default(5).describe("Number of turns for recap analysis"),
+  lookbackTurns: z.number().default(10).describe("Number of turns for recap analysis (higher = deeper context for research tasks)"),
   entropyThreshold: z.number().default(0.6).describe("Entropy spike detection threshold (0-1)"),
   abstentionThreshold: z.number().default(0.6).describe("Abstention confidence threshold (0-1)"),
 });
@@ -51,6 +51,7 @@ export function handleLoop(store: SessionStore, catalog: ToolCatalog, input: Loo
           discovery: result.discovery,
           grounding: result.grounding,
           drift: result.drift,
+          depth: result.depth,
           timestamp: result.timestamp,
         }, null, 2),
       },

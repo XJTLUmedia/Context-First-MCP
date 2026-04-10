@@ -1,4 +1,5 @@
 import type { AmbiguityResult, VerificationResult, HistoryEntry, HistorySummary } from "../state/types.js";
+import nlp from "compromise";
 
 /**
  * Heuristic-based validator for ambiguity checking and execution verification.
@@ -74,6 +75,10 @@ export function checkAmbiguity(requirement: string, context?: string): Ambiguity
   }
 
   score = Math.max(0, Math.min(1, score));
+
+  // compromise: count named/proper nouns — more entities → more specific requirement
+  const entityCount = (nlp(fullText).match("#ProperNoun").out("array") as string[]).length;
+  score -= Math.min(0.15, entityCount * 0.05);
   const uniqueAreas = [...new Set(underspecifiedAreas)];
 
   return {
@@ -233,22 +238,16 @@ export function summarizeHistory(
     }
   }
 
-  // Topic progression via keyword extraction per segment
+  // Topic progression via compromise noun extraction per segment
   const segmentSize = Math.max(1, Math.ceil(history.length / 4));
   const topicProgression: string[] = [];
   for (let i = 0; i < history.length; i += segmentSize) {
     const segment = history.slice(i, i + segmentSize);
-    const wordFreq = new Map<string, number>();
-    for (const entry of segment) {
-      const words = entry.content.toLowerCase().split(/\W+/).filter((w) => w.length > 4);
-      for (const word of words) {
-        wordFreq.set(word, (wordFreq.get(word) || 0) + 1);
-      }
-    }
-    const topWords = [...wordFreq.entries()]
-      .sort((a, b) => b[1] - a[1])
+    const segText = segment.map((e) => e.content).join(" ");
+    const topWords = (nlp(segText).nouns().out("freq" as unknown as "text") as Array<{ normal: string; count: number }>)
       .slice(0, 3)
-      .map(([w]) => w);
+      .map((f) => f.normal)
+      .filter((w) => w.length > 3);
     if (topWords.length > 0) {
       const turnRange = `${segment[0].turn}-${segment[segment.length - 1].turn}`;
       topicProgression.push(`Turns ${turnRange}: ${topWords.join(", ")}`);

@@ -1,4 +1,5 @@
 import type { HistoryEntry, RecapResult } from "../state/types.js";
+import nlp from "compromise";
 
 /**
  * Heuristic-based conversation refiner.
@@ -22,7 +23,7 @@ function extractDecisions(messages: HistoryEntry[]): string[] {
       }
     }
   }
-  return [...new Set(decisions)].slice(0, 10);
+  return [...new Set(decisions)].slice(0, 20);
 }
 
 /** Extract potential hidden intents — things implied but not stated directly */
@@ -66,7 +67,7 @@ function extractHiddenIntents(messages: HistoryEntry[]): string[] {
       }
     }
   }
-  return [...new Set(intents)].slice(0, 8);
+  return [...new Set(intents)].slice(0, 15);
 }
 
 /** Build a compressed summary of the conversation */
@@ -76,34 +77,13 @@ function buildSummary(messages: HistoryEntry[]): string {
   const userMessages = messages.filter((m) => m.role === "user");
   const assistantMessages = messages.filter((m) => m.role === "assistant");
 
-  // Extract topic keywords via simple TF approach
-  const wordFreq = new Map<string, number>();
-  const stopWords = new Set([
-    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-    "have", "has", "had", "do", "does", "did", "will", "would", "could",
-    "should", "may", "might", "can", "shall", "to", "of", "in", "for",
-    "on", "with", "at", "by", "from", "as", "into", "through", "during",
-    "before", "after", "above", "below", "between", "and", "but", "or",
-    "nor", "not", "no", "so", "yet", "both", "either", "neither", "each",
-    "every", "all", "any", "few", "more", "most", "other", "some", "such",
-    "than", "too", "very", "just", "also", "now", "then", "here", "there",
-    "when", "where", "why", "how", "what", "which", "who", "whom", "this",
-    "that", "these", "those", "i", "you", "he", "she", "it", "we", "they",
-    "me", "him", "her", "us", "them", "my", "your", "his", "its", "our",
-    "their",
-  ]);
-
-  for (const msg of messages) {
-    const words = msg.content.toLowerCase().split(/\W+/).filter((w) => w.length > 2 && !stopWords.has(w));
-    for (const word of words) {
-      wordFreq.set(word, (wordFreq.get(word) || 0) + 1);
-    }
-  }
-
-  const topTerms = [...wordFreq.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 8)
-    .map(([word]) => word);
+  // Extract topic keywords via compromise noun frequency analysis
+  const allText = messages.map((m) => m.content).join(" ");
+  const doc = nlp(allText);
+  const topTerms = (doc.nouns().out("freq" as unknown as "text") as Array<{ normal: string; count: number }>)
+    .slice(0, 20)
+    .map((f) => f.normal)
+    .filter((term) => term.length > 2);
 
   const parts: string[] = [];
   parts.push(
@@ -119,8 +99,8 @@ function buildSummary(messages: HistoryEntry[]): string {
     parts.push("Recent user focus:");
     for (const msg of recentUser) {
       const truncated =
-        msg.content.length > 120
-          ? msg.content.slice(0, 120) + "..."
+        msg.content.length > 500
+          ? msg.content.slice(0, 500) + "..."
           : msg.content;
       parts.push(`  [Turn ${msg.turn}] ${truncated}`);
     }

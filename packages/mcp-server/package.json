@@ -12,7 +12,9 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
@@ -21,6 +23,16 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "compromise": "^14.15.0",
+    "geneticalgorithm": "^1.0.2",
+    "graphology": "^0.26.0",
+    "graphology-dag": "^0.4.1",
+    "graphology-metrics": "^2.4.0",
+    "js-tiktoken": "^1.0.21",
+    "natural": "^8.1.1",
+    "simple-statistics": "^7.8.9",
+    "string-similarity": "^4.0.4",
+    "wink-bm25-text-search": "^3.1.2",
     "zod": "^3.25.0"
   },
   "devDependencies": {
@@ -36,5 +48,14 @@
     "url": "https://github.com/context-first/mcp",
     "directory": "packages/mcp-server"
   },
-  "keywords": ["mcp", "model-context-protocol", "context", "llm", "conversation", "state", "orchestration", "unified-loop"]
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "context",
+    "llm",
+    "conversation",
+    "state",
+    "orchestration",
+    "unified-loop"
+  ]
 }
