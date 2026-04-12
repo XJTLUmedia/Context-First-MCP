@@ -2,18 +2,19 @@ import { z } from "zod";
 import type { SessionStore } from "../state/store.js";
 import type { ToolCatalog } from "../registry/catalog.js";
 import { runUnifiedLoop } from "../engine/loop.js";
+import { recordLoopCall } from "../engine/loop-freshness.js";
 
 export const loopInputSchema = z.object({
   sessionId: z.string().default("default"),
   messages: z.array(z.object({
     role: z.enum(["user", "assistant"]),
     content: z.string(),
-    turn: z.number(),
-  })).describe("Recent conversation messages to process through the unified loop"),
-  currentInput: z.string().optional().describe("Latest user message for conflict & ambiguity analysis. Auto-inferred from last user message if omitted."),
-  claim: z.string().optional().describe("Assertion to evaluate for abstention check"),
-  discoveryQuery: z.string().optional().describe("Natural language query for tool recommendation"),
-  lookbackTurns: z.number().default(10).describe("Number of turns for recap analysis (higher = deeper context for research tasks)"),
+    turn: z.number().describe("Sequential turn number starting from 1"),
+  })).default([]).describe("Recent conversation messages. Include at least the last 2-3 user/assistant exchanges. Example: [{role:'user', content:'explain X', turn:1}, {role:'assistant', content:'X is...', turn:2}]. If empty, the loop runs with reduced context."),
+  currentInput: z.string().optional().describe("The current user message or task description. Auto-inferred from last user message in messages array if omitted."),
+  claim: z.string().optional().describe("A specific assertion or answer to fact-check for confidence evaluation"),
+  discoveryQuery: z.string().optional().describe("What capability do you need? e.g. 'store research findings' or 'compress reasoning chain'"),
+  lookbackTurns: z.number().default(10).describe("How many turns to analyze (use 15-20 for research or long conversations)"),
   entropyThreshold: z.number().default(0.6).describe("Entropy spike detection threshold (0-1)"),
   abstentionThreshold: z.number().default(0.6).describe("Abstention confidence threshold (0-1)"),
 });
@@ -21,6 +22,9 @@ export const loopInputSchema = z.object({
 export type LoopToolInput = z.infer<typeof loopInputSchema>;
 
 export function handleLoop(store: SessionStore, catalog: ToolCatalog, input: LoopToolInput) {
+  // Record that context_loop was called — resets the freshness counter
+  recordLoopCall(input.sessionId);
+
   const result = runUnifiedLoop(store, catalog, {
     sessionId: input.sessionId,
     messages: input.messages,

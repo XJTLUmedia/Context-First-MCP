@@ -1,0 +1,13 @@
+{
+  "servers": {
+    "context-first": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["packages/stdio-server/dist/index.js"],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "CF_BUILD_VERSION": "2"
+      }
+    }
+  }
+}

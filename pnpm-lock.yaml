@@ -137,8 +137,8 @@ importers:
         specifier: ^1.29.0
         version: 1.29.0(zod@3.25.76)
       '@xjtlumedia/context-first-mcp-server':
-        specifier: ^1.0.0
-        version: 1.0.0
+        specifier: workspace:*
+        version: link:../mcp-server
     devDependencies:
       '@types/node':
         specifier: ^20.0.0
@@ -855,10 +855,6 @@ packages:
 
   '@vitest/utils@2.1.9':
     resolution: {integrity: sha512-v0psaMSkNJ3A2NMrUEHFRzJtDPFn+/VWZ5WxImB21T9fjucJRmS7xCS3ppEnARb9y11OAzaD+P2Ps+b+BGX5iQ==}
-
-  '@xjtlumedia/context-first-mcp-server@1.0.0':
-    resolution: {integrity: sha512-tbVdWyV0eOwccNDd3+qKYtPviZ/FWTl955WgIHXa9wuDAfsvGTxO6VE2pFE1xk6rtC3ChzRxIbgi0BjVawm1Kw==}
-    engines: {node: '>=18'}
 
   '@yomguithereal/helpers@1.1.1':
     resolution: {integrity: sha512-UYvAq/XCA7xoh1juWDYsq3W0WywOB+pz8cgVnE1b45ZfdMhBvHDrgmSFG3jXeZSr2tMTYLGHFHON+ekG05Jebg==}
@@ -3911,14 +3907,6 @@ snapshots:
       '@vitest/pretty-format': 2.1.9
       loupe: 3.2.1
       tinyrainbow: 1.2.0
-
-  '@xjtlumedia/context-first-mcp-server@1.0.0':
-    dependencies:
-      '@modelcontextprotocol/sdk': 1.29.0(zod@3.25.76)
-      zod: 3.25.76
-    transitivePeerDependencies:
-      - '@cfworker/json-schema'
-      - supports-color
 
   '@yomguithereal/helpers@1.1.1': {}
 
