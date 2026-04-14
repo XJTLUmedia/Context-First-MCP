@@ -1,4 +1,8 @@
 {
+  "$schema": "https://glama.ai/mcp/schemas/server.json",
+  "maintainers": [
+    "XJTLUmedia"
+  ],
   "name": "context-first-mcp",
   "description": "Context Custodian MCP server — fight LLM context degradation with 37 tools across 7 layers: context health, state management, sandboxing, persistent memory, advanced reasoning (InftyThink, Coconut, KAG-Thinker, MindEvolution, ExtraCoT), truthfulness verification, and structured research pipeline with autonomous file writing. One context_loop call orchestrates all layers and returns a unified directive.",
   "category": "knowledge-and-memory",
