@@ -60,7 +60,7 @@ describe("Context-First MCP server surface", () => {
       const researchPipelineTool = listedTools.tools.find((tool) => tool.name === "research_pipeline");
 
       expect(researchPipelineTool).toBeDefined();
-      expect(researchPipelineTool?.description).toContain("Orchestrates all 34 underlying Context-First tool-equivalents");
+      expect(researchPipelineTool?.description).toContain("Orchestrates all underlying Context-First layers through 6 phases");
       expect(researchPipelineTool?.inputSchema.properties).toHaveProperty("phase");
 
       const sessionId = "server-surface-research-pipeline";
@@ -157,32 +157,41 @@ describe("Context-First MCP server surface", () => {
       });
 
       await harness.client.callTool({
-        name: "set_state",
+        name: "context_health",
         arguments: {
           sessionId,
-          key: "pipeline_phase",
-          value: "verify",
-          source: "integration-test",
+          check: "set_state",
+          params: {
+            key: "pipeline_phase",
+            value: "verify",
+            source: "integration-test",
+          },
         },
       });
 
       await harness.client.callTool({
-        name: "set_state",
+        name: "context_health",
         arguments: {
           sessionId,
-          key: "pipeline_verify_passed",
-          value: true,
-          source: "integration-test",
+          check: "set_state",
+          params: {
+            key: "pipeline_verify_passed",
+            value: true,
+            source: "integration-test",
+          },
         },
       });
 
       await harness.client.callTool({
-        name: "set_state",
+        name: "context_health",
         arguments: {
           sessionId,
-          key: "pipeline_last_verify_action",
-          value: "proceed",
-          source: "integration-test",
+          check: "set_state",
+          params: {
+            key: "pipeline_last_verify_action",
+            value: "proceed",
+            source: "integration-test",
+          },
         },
       });
 
@@ -295,32 +304,41 @@ describe("Context-First MCP server surface", () => {
       });
 
       await harness.client.callTool({
-        name: "set_state",
+        name: "context_health",
         arguments: {
           sessionId,
-          key: "pipeline_phase",
-          value: "verify",
-          source: "integration-test",
+          check: "set_state",
+          params: {
+            key: "pipeline_phase",
+            value: "verify",
+            source: "integration-test",
+          },
         },
       });
 
       await harness.client.callTool({
-        name: "set_state",
+        name: "context_health",
         arguments: {
           sessionId,
-          key: "pipeline_verify_passed",
-          value: true,
-          source: "integration-test",
+          check: "set_state",
+          params: {
+            key: "pipeline_verify_passed",
+            value: true,
+            source: "integration-test",
+          },
         },
       });
 
       await harness.client.callTool({
-        name: "set_state",
+        name: "context_health",
         arguments: {
           sessionId,
-          key: "pipeline_last_verify_action",
-          value: "proceed",
-          source: "integration-test",
+          check: "set_state",
+          params: {
+            key: "pipeline_last_verify_action",
+            value: "proceed",
+            source: "integration-test",
+          },
         },
       });
 
