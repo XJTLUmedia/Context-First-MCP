@@ -389,17 +389,6 @@ cd packages/frontend && pnpm dev
 pnpm test
 ```
 
-## Configuration
-
-No configuration required. For enhanced LLM-powered analysis:
-
-```bash
-LLM_PROVIDER=openai      # or "anthropic"
-LLM_API_KEY=sk-...
-```
-
----
-
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).

@@ -1,6 +1,6 @@
 {
   "name": "context-first-mcp",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Context Custodian MCP server — npx entry point for local stdio transport",
   "mcpName": "io.github.XJTLUmedia/context-first-mcp",
   "license": "MIT",

@@ -44,11 +44,5 @@ RUN pnpm install --frozen-lockfile --prod
 COPY --from=builder /app/packages/mcp-server/dist  packages/mcp-server/dist
 COPY --from=builder /app/packages/stdio-server/dist packages/stdio-server/dist
 
-# ── Environment variables ──────────────────────────────────────────────────────
-# LLM provider for enhanced analysis (optional)
-ENV LLM_PROVIDER=""
-# API key for the chosen LLM provider (optional)
-ENV LLM_API_KEY=""
-
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 CMD ["node", "packages/stdio-server/dist/index.js"]

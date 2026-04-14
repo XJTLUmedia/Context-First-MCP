@@ -4,26 +4,10 @@ startCommand:
   type: stdio
   configSchema:
     type: object
-    properties:
-      llmProvider:
-        type: string
-        title: "LLM Provider"
-        description: "Optional LLM provider for AI-powered analysis ('none' uses heuristics only)"
-        enum: ["none", "openai", "anthropic"]
-        default: "none"
-      llmApiKey:
-        type: string
-        title: "LLM API Key"
-        description: "API key for the selected LLM provider (optional — all 37 tools work without one)"
+    properties: {}
   commandFunction: |
-    (config) => ({
+    (_config) => ({
       command: 'npx',
-      args: ['-y', 'context-first-mcp'],
-      env: {
-        LLM_PROVIDER: config.llmProvider || 'none',
-        LLM_API_KEY: config.llmApiKey || ''
-      }
+      args: ['-y', 'context-first-mcp']
     })
-  exampleConfig:
-    llmProvider: "none"
-    llmApiKey: ""
+  exampleConfig: {}
