@@ -2,6 +2,7 @@
   "name": "context-first-mcp",
   "version": "1.2.1",
   "description": "Context Custodian MCP server — npx entry point for local stdio transport",
+  "mcpName": "io.github.xjtlumedia/context-first-mcp",
   "license": "MIT",
   "type": "module",
   "bin": {
@@ -29,7 +30,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/context-first/mcp.git",
+    "url": "git+https://github.com/XJTLUmedia/Context-First-MCP.git",
     "directory": "packages/stdio-server"
   },
   "homepage": "https://context-first-mcp.vercel.app",
@@ -39,6 +40,22 @@
     "context",
     "llm",
     "stdio",
-    "npx"
+    "npx",
+    "memory",
+    "reasoning",
+    "research",
+    "truthfulness",
+    "context-drift",
+    "hallucination",
+    "claude",
+    "cursor",
+    "ai-agent",
+    "orchestration",
+    "knowledge-graph",
+    "unified-loop",
+    "state-management",
+    "inftythink",
+    "coconut",
+    "kag-thinker"
   ]
 }

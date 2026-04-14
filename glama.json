@@ -1,11 +1,20 @@
 {
   "name": "context-first-mcp",
-  "description": "Context Custodian MCP server — fight LLM context degradation with recap, conflict detection, ambiguity checking, execution verification, active tool discovery (MCP-Zero), entropy-guided resetting (ERGO), multi-agent context quarantining, verifiable abstention (RLAAR), and unified orchestration loop",
+  "description": "Context Custodian MCP server — fight LLM context degradation with 37 tools across 7 layers: context health, state management, sandboxing, persistent memory, advanced reasoning (InftyThink, Coconut, KAG-Thinker, MindEvolution, ExtraCoT), truthfulness verification, and structured research pipeline with autonomous file writing. One context_loop call orchestrates all layers and returns a unified directive.",
   "category": "knowledge-and-memory",
-  "tags": ["context", "conversation", "state-management", "conflict-detection", "recap", "ambiguity", "tool-discovery", "entropy", "quarantine", "abstention", "mcp-zero", "ergo", "multi-agent", "unified-loop", "orchestration"],
-  "tools": 14,
+  "tags": [
+    "context", "conversation", "state-management", "conflict-detection", "recap",
+    "ambiguity", "tool-discovery", "entropy", "quarantine", "abstention",
+    "mcp-zero", "ergo", "multi-agent", "unified-loop", "orchestration",
+    "memory", "reasoning", "research", "truthfulness", "verification",
+    "inftythink", "coconut", "kag", "knowledge-graph", "self-critique",
+    "context-drift", "hallucination-prevention", "research-pipeline"
+  ],
+  "tools": 37,
   "transport": ["stdio", "streamable-http"],
   "platforms": ["windows", "macos", "linux"],
   "license": "MIT",
-  "homepage": "https://context-first-mcp.vercel.app"
+  "homepage": "https://context-first-mcp.vercel.app",
+  "repository": "https://github.com/XJTLUmedia/Context-First-MCP",
+  "npm": "https://www.npmjs.com/package/context-first-mcp"
 }

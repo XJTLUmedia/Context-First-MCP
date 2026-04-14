@@ -14,7 +14,7 @@ startCommand:
       llmApiKey:
         type: string
         title: "LLM API Key"
-        description: "API key for the selected LLM provider (optional)"
+        description: "API key for the selected LLM provider (optional — all 37 tools work without one)"
   commandFunction: |
     (config) => ({
       command: 'npx',
