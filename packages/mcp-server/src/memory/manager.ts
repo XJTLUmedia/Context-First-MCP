@@ -270,8 +270,15 @@ export class UnifiedMemoryManager {
             maxResults
           );
           for (const r of results) {
+            // Present graph connections as natural language, not raw metadata.
+            // Internal scores (PageRank, distance) are used for ranking but NOT
+            // exposed in content — otherwise reasoning engines and the LLM echo
+            // them into user-facing output files.
+            const pathDescription = r.path.length > 1
+              ? r.path.join(" → ")
+              : r.node.label;
             allCandidates.push({
-              content: `[${r.node.type}] ${r.node.label} (PageRank: ${r.node.pageRank.toFixed(3)}, path: ${r.path.join(" → ")})`,
+              content: pathDescription,
               source: "graph",
               relevanceScore:
                 weight * (1 / (1 + r.distance)) * r.node.pageRank,

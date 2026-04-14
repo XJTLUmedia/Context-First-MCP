@@ -4,6 +4,7 @@ import type {
   ClaimClassification,
 } from "../state/types.js";
 import nlp from "compromise";
+import { compareTwoStrings, extractNouns } from "./nlp-utils.js";
 
 /**
  * Internal State Probing — inspired by "The Internal State of an LLM Knows When It's Lying"
@@ -239,7 +240,6 @@ function computeFactualAlignment(
   if (groundTruth.size === 0) return 0.5; // neutral when no facts available
 
   const claimLower = claim.toLowerCase();
-  const claimTokens = tokenize(claimLower);
   let alignedCount = 0;
   let checkedCount = 0;
 
@@ -255,10 +255,13 @@ function computeFactualAlignment(
     if (!mentionsTopic) continue;
     checkedCount++;
 
-    // Check alignment: does the claim agree with the stored value?
-    const valueTokens = tokenize(valueStr);
-    const overlap = claimTokens.filter(t => valueTokens.includes(t)).length;
-    const alignment = valueTokens.length > 0 ? overlap / valueTokens.length : 0;
+    // Check alignment: direct containment or Dice coefficient
+    let alignment: number;
+    if (claimLower.includes(valueStr)) {
+      alignment = 1.0;
+    } else {
+      alignment = compareTwoStrings(claimLower, valueStr);
+    }
 
     // Check for negation of the stored fact
     const negatesValue = new RegExp(
@@ -298,17 +301,16 @@ function computeSelfConsistency(
 ): number {
   if (allClaims.length <= 1) return 0.8;
 
-  const claimTokens = new Set(tokenize(claim.toLowerCase()));
+  const claimLowerSC = claim.toLowerCase();
   let consistencyTotal = 0;
   let comparisons = 0;
 
   for (let i = 0; i < allClaims.length; i++) {
     if (i === claimIndex) continue;
 
-    const otherTokens = new Set(tokenize(allClaims[i].toLowerCase()));
-    const shared = [...claimTokens].filter(t => otherTokens.has(t));
-
-    if (shared.length < 2) continue; // not enough overlap to compare
+    // Use Dice coefficient to check if claims are topically related
+    const relatedness = compareTwoStrings(claimLowerSC, allClaims[i].toLowerCase());
+    if (relatedness < 0.15) continue; // not enough overlap to compare
     comparisons++;
 
     // Check for contradictory patterns between related claims
@@ -328,8 +330,8 @@ function detectContradictionPair(a: string, b: string): boolean {
 
   // If one negates a topic the other affirms, potential contradiction
   if (aHasNeg !== bHasNeg) {
-    const aTopics = extractKeyNouns(a);
-    const bTopics = extractKeyNouns(b);
+    const aTopics = extractNouns(a);
+    const bTopics = extractNouns(b);
     const overlap = aTopics.filter(t => bTopics.includes(t));
     if (overlap.length >= 2) return true;
   }
@@ -337,20 +339,7 @@ function detectContradictionPair(a: string, b: string): boolean {
   return false;
 }
 
-function extractKeyNouns(text: string): string[] {
-  const stopWords = new Set([
-    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-    "have", "has", "had", "do", "does", "did", "will", "would", "could",
-    "should", "may", "might", "can", "shall", "this", "that", "these",
-    "those", "it", "its", "and", "or", "but", "not", "no", "with",
-    "from", "for", "to", "of", "in", "on", "at", "by", "as",
-  ]);
 
-  return text
-    .toLowerCase()
-    .split(/\W+/)
-    .filter(w => w.length > 2 && !stopWords.has(w));
-}
 
 // ─── Recommendation Generation ───
 
@@ -405,12 +394,7 @@ function generateRecommendations(
 
 // ─── Utilities ───
 
-function tokenize(text: string): string[] {
-  return text
-    .toLowerCase()
-    .split(/\W+/)
-    .filter(w => w.length > 2);
-}
+
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

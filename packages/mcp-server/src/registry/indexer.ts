@@ -1,5 +1,4 @@
 import type { SearchResult } from "./types.js";
-import type { ToolRegistryEntry } from "./types.js";
 
 const STOPWORDS = new Set([
   "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",

@@ -1,4 +1,5 @@
 import type { VerifyFirstResult, VerificationCheck } from "../state/types.js";
+import { splitSentences, compareTwoStrings } from "./nlp-utils.js";
 
 /**
  * Verify-First Strategy — inspired by
@@ -160,10 +161,7 @@ export function verifyFirst(
 // ─── Claim Extraction ───
 
 function extractVerifiableClaims(text: string): string[] {
-  const sentences = text
-    .split(/(?<=[.!?])\s+/)
-    .map(s => s.trim())
-    .filter(s => s.length > 15);
+  const sentences = splitSentences(text).filter(s => s.length > 15);
 
   return sentences.filter(s => {
     if (s.endsWith("?")) return false;
@@ -218,15 +216,13 @@ function checkFactualGrounding(
   knownFacts: string[],
   context: string[]
 ): number {
-  const claimTokens = tokenize(claim);
   let maxAlignment = 0;
 
   const sources = [...knownFacts, ...context];
   for (const source of sources) {
-    const sourceTokens = new Set(tokenize(source));
-    const overlap = claimTokens.filter(t => sourceTokens.has(t)).length;
-    const alignment = claimTokens.length > 0 ? overlap / claimTokens.length : 0;
-    maxAlignment = Math.max(maxAlignment, alignment);
+    // Dice coefficient for claim-source similarity
+    const dice = compareTwoStrings(claim.toLowerCase(), source.toLowerCase());
+    maxAlignment = Math.max(maxAlignment, dice);
   }
 
   // Bonus for specific claims (specificity indicates groundedness)
@@ -236,8 +232,7 @@ function checkFactualGrounding(
 }
 
 function checkInternalConsistency(claim: string, fullAnswer: string): number {
-  const otherSentences = fullAnswer
-    .split(/(?<=[.!?])\s+/)
+  const otherSentences = splitSentences(fullAnswer)
     .filter(s => s.trim() !== claim && s.length > 10);
 
   if (otherSentences.length === 0) return 1.0;
@@ -260,12 +255,10 @@ function checkInternalConsistency(claim: string, fullAnswer: string): number {
 }
 
 function checkCompleteness(claim: string, question: string): number {
-  const questionTopics = extractTopicWords(question);
-  if (questionTopics.length === 0) return 0.5;
+  if (!question || question.trim().length === 0) return 0.5;
 
-  const claimTokens = new Set(tokenize(claim));
-  const addressed = questionTopics.filter(t => claimTokens.has(t)).length;
-  return questionTopics.length > 0 ? addressed / questionTopics.length : 0.5;
+  // Dice coefficient to measure how well the claim addresses the question
+  return compareTwoStrings(claim.toLowerCase(), question.toLowerCase());
 }
 
 function checkSpecificity(claim: string): number {
@@ -390,10 +383,6 @@ function extractTopicWords(text: string): string[] {
     "from", "for", "to", "of", "in", "on", "at", "by", "as",
   ]);
   return text.toLowerCase().split(/\W+/).filter(w => w.length > 2 && !stopWords.has(w));
-}
-
-function tokenize(text: string): string[] {
-  return text.toLowerCase().split(/\W+/).filter(w => w.length > 2);
 }
 
 function avg(values: number[]): number {

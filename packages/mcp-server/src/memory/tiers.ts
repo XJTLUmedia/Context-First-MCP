@@ -14,8 +14,6 @@ import type {
   EpisodicIndexEntry,
   SemanticMemoryUnit,
   ContentHash,
-  MemoryManagerConfig,
-  DEFAULT_MEMORY_CONFIG,
 } from "./types.js";
 import { djb2Hash } from "./episode-store.js";
 

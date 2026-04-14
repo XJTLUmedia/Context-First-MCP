@@ -24,7 +24,7 @@ export const MAX_ACCEPTABLE_LOSS = 0.0001; // 0.01%
  * - Curated memory (content match)
  * - Callback memory (trigger pattern match)
  */
-export function isFactRetained(
+function isFactRetained(
   fact: AtomicFact,
   checkers: {
     hasSentenceHash: (hash: ContentHash) => boolean;

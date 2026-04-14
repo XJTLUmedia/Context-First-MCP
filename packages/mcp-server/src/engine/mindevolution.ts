@@ -1,5 +1,6 @@
 import type { MindEvolutionResult, EvolutionCandidate } from "../state/types.js";
 import { compareTwoStrings } from "string-similarity";
+import { splitSentences, tfidfCosineSimilarity, extractNouns, paraphraseText, removeFillers } from "./nlp-utils.js";
 
 /**
  * Mind Evolution — Evolutionary Search for Reasoning Depth (2025)
@@ -214,50 +215,74 @@ function initializePopulation(
 
 /**
  * Create a variation of an existing seed by restructuring its content.
- * Uses deterministic text operations — no template injection or random text generation.
+ * Uses NLP-aware operations: topic grouping, paraphrasing, filler removal.
  */
 function createVariation(seed: string, problem: string, index: number): string {
-  const sentences = seed.split(/(?<=[.!?])\s+/).filter(s => s.trim().length > 5);
+  const sentences = splitSentences(seed);
   if (sentences.length <= 1) return seed;
 
   const strategy = index % 4;
 
   switch (strategy) {
     case 0: {
-      // Reverse sentence order (conclusion-first)
-      return sentences.reverse().join(" ");
+      // Topic-clustered reorder: group sentences by shared nouns with the problem
+      const problemNouns = new Set(extractNouns(problem));
+      const relevant: string[] = [];
+      const background: string[] = [];
+      for (const s of sentences) {
+        const sNouns = extractNouns(s);
+        const overlap = sNouns.filter(n => problemNouns.has(n)).length;
+        if (overlap > 0) relevant.push(s);
+        else background.push(s);
+      }
+      return [...relevant, ...background].join(" ");
     }
     case 1: {
-      // Interleave: even sentences first, then odd
-      const evens = sentences.filter((_, i) => i % 2 === 0);
-      const odds = sentences.filter((_, i) => i % 2 !== 0);
-      return [...evens, ...odds].join(" ");
+      // Paraphrase: apply synonym substitution + voice change via compromise
+      return paraphraseText(seed);
     }
     case 2: {
-      // Drop middle section, keep intro and conclusion
-      if (sentences.length <= 3) return seed;
-      const intro = sentences.slice(0, Math.ceil(sentences.length / 3));
-      const conclusion = sentences.slice(-Math.ceil(sentences.length / 3));
-      return [...intro, ...conclusion].join(" ");
+      // Tighten: remove filler words and low-relevance sentences
+      const cleaned = removeFillers(seed);
+      const cleanedSentences = splitSentences(cleaned);
+      if (cleanedSentences.length <= 2) return cleaned;
+      // Drop the sentence least relevant to the problem
+      let minSim = Infinity;
+      let minIdx = 0;
+      for (let i = 0; i < cleanedSentences.length; i++) {
+        const sim = tfidfCosineSimilarity(cleanedSentences[i], problem);
+        if (sim < minSim) { minSim = sim; minIdx = i; }
+      }
+      const result = [...cleanedSentences];
+      result.splice(minIdx, 1);
+      return result.join(" ");
     }
     case 3:
     default: {
-      // Rotate: move first sentence to end
-      const [first, ...rest] = sentences;
-      return [...rest, first].join(" ");
+      // Emphasis shift: move the most problem-relevant sentence to the front
+      let maxSim = -1;
+      let maxIdx = 0;
+      for (let i = 0; i < sentences.length; i++) {
+        const sim = tfidfCosineSimilarity(sentences[i], problem);
+        if (sim > maxSim) { maxSim = sim; maxIdx = i; }
+      }
+      if (maxIdx === 0) return seed;
+      const reordered = [sentences[maxIdx], ...sentences.filter((_, i) => i !== maxIdx)];
+      return reordered.join(" ");
     }
   }
 }
 
 /**
  * Evaluate fitness of a candidate response against problem criteria.
+ * Uses TF-IDF cosine similarity for relevance and criteria coverage.
  */
 function evaluateFitness(response: string, problem: string, criteria: string[]): number {
   let score = 0;
   let maxScore = 0;
 
-  // Relevance: does the response address the problem? (Dice coefficient via string-similarity)
-  const relevanceSim = compareTwoStrings(problem.toLowerCase(), response.toLowerCase());
+  // Relevance: TF-IDF cosine similarity between problem and response
+  const relevanceSim = tfidfCosineSimilarity(problem, response);
   score += relevanceSim * 3;
   maxScore += 3;
 
@@ -275,11 +300,10 @@ function evaluateFitness(response: string, problem: string, criteria: string[]):
   score += Math.min(1.5, specificTerms * 0.5);
   maxScore += 1.5;
 
-  // Criteria coverage
+  // Criteria coverage via TF-IDF similarity
   for (const criterion of criteria) {
-    const criterionWords = criterion.toLowerCase().split(/\s+/).filter(w => w.length > 3);
-    const covered = criterionWords.some(w => response.toLowerCase().includes(w));
-    if (covered) score += 2 / criteria.length;
+    const criterionSim = tfidfCosineSimilarity(criterion, response);
+    score += criterionSim * (2 / criteria.length);
     maxScore += 2 / criteria.length;
   }
 
@@ -288,7 +312,7 @@ function evaluateFitness(response: string, problem: string, criteria: string[]):
   maxScore += 1;
 
   // Not too repetitive
-  const sentences = response.split(/[.!?]+/).filter(s => s.trim().length > 5);
+  const sentences = splitSentences(response);
   const uniqueStarts = new Set(sentences.map(s => s.trim().split(/\s+/).slice(0, 3).join(" ").toLowerCase()));
   const repetitionPenalty = sentences.length > 0
     ? 1 - (uniqueStarts.size / sentences.length) : 0;
@@ -307,7 +331,8 @@ function selectFittest(population: EvolutionCandidate[], ratio: number): Evoluti
 }
 
 /**
- * Crossover: combine two parent candidates to produce offspring.
+ * Crossover: combine two parent candidates by selecting the most relevant
+ * sentences from each, using TF-IDF similarity to the problem.
  */
 function crossover(
   parent1: EvolutionCandidate,
@@ -317,22 +342,28 @@ function crossover(
   criteria: string[],
   id: string
 ): EvolutionCandidate {
-  // Sentence-level crossover: alternate sentences from each parent
-  const sentences1 = parent1.response.split(/[.!?]+/).filter(s => s.trim().length > 5);
-  const sentences2 = parent2.response.split(/[.!?]+/).filter(s => s.trim().length > 5);
+  const sentences1 = splitSentences(parent1.response);
+  const sentences2 = splitSentences(parent2.response);
 
-  const combined: string[] = [];
-  const maxLen = Math.max(sentences1.length, sentences2.length);
-
-  for (let i = 0; i < maxLen; i++) {
-    if (i % 2 === 0 && i < sentences1.length) {
-      combined.push(sentences1[i].trim());
-    } else if (i < sentences2.length) {
-      combined.push(sentences2[i].trim());
+  // Score every sentence by relevance to the problem
+  const scored: Array<{ text: string; sim: number }> = [];
+  for (const s of sentences1) {
+    scored.push({ text: s, sim: tfidfCosineSimilarity(s, problem) });
+  }
+  for (const s of sentences2) {
+    // Avoid near-duplicate sentences from the other parent
+    const isDupe = scored.some(existing => compareTwoStrings(existing.text.toLowerCase(), s.toLowerCase()) > 0.8);
+    if (!isDupe) {
+      scored.push({ text: s, sim: tfidfCosineSimilarity(s, problem) });
     }
   }
 
-  const response = combined.join(". ") + ".";
+  // Take the top sentences by relevance, capped at a reasonable length
+  scored.sort((a, b) => b.sim - a.sim);
+  const targetLen = Math.max(sentences1.length, sentences2.length);
+  const selected = scored.slice(0, targetLen).map(s => s.text);
+
+  const response = selected.join(" ");
   const fitness = evaluateFitness(response, problem, criteria);
 
   return {
@@ -347,8 +378,8 @@ function crossover(
 }
 
 /**
- * Mutate: apply a deterministic text transformation to a candidate.
- * Uses real text operations instead of template injection.
+ * Mutate: apply an NLP-aware text transformation to a candidate.
+ * Uses paraphrasing, filler removal, and relevance-based pruning.
  */
 function mutate(
   parent: EvolutionCandidate,
@@ -357,41 +388,33 @@ function mutate(
   criteria: string[],
   id: string
 ): EvolutionCandidate {
-  const sentences = parent.response.split(/(?<=[.!?])\s+/).filter(s => s.trim().length > 5);
+  const sentences = splitSentences(parent.response);
 
-  let mutated: string[];
+  let response: string;
   const mutationKind = generation % 3;
 
   if (sentences.length <= 1) {
-    // Can't restructure a single sentence — just keep it
-    mutated = sentences;
+    // Single sentence: paraphrase it
+    response = paraphraseText(parent.response);
   } else if (mutationKind === 0) {
-    // Swap two adjacent sentences
-    mutated = [...sentences];
-    const swapIdx = generation % (mutated.length - 1);
-    [mutated[swapIdx], mutated[swapIdx + 1]] = [mutated[swapIdx + 1], mutated[swapIdx]];
+    // Paraphrase: synonym substitution + voice change via compromise
+    response = paraphraseText(parent.response);
   } else if (mutationKind === 1) {
-    // Remove the weakest sentence (shortest, likely least informative)
-    mutated = [...sentences];
-    if (mutated.length > 2) {
-      let minLen = Infinity;
-      let minIdx = 0;
-      for (let i = 0; i < mutated.length; i++) {
-        if (mutated[i].length < minLen) { minLen = mutated[i].length; minIdx = i; }
-      }
-      mutated.splice(minIdx, 1);
+    // Prune: remove the sentence least relevant to the problem
+    let minSim = Infinity;
+    let minIdx = 0;
+    for (let i = 0; i < sentences.length; i++) {
+      const sim = tfidfCosineSimilarity(sentences[i], problem);
+      if (sim < minSim) { minSim = sim; minIdx = i; }
     }
+    const pruned = [...sentences];
+    if (pruned.length > 2) pruned.splice(minIdx, 1);
+    response = pruned.join(" ");
   } else {
-    // Merge first two sentences into one
-    mutated = [...sentences];
-    if (mutated.length >= 2) {
-      const merged = mutated[0].replace(/[.!?]\s*$/, "") + ", and " +
-        mutated[1].charAt(0).toLowerCase() + mutated[1].slice(1);
-      mutated.splice(0, 2, merged);
-    }
+    // Tighten: remove fillers and hedge words
+    response = removeFillers(parent.response);
   }
 
-  const response = mutated.join(" ");
   const fitness = evaluateFitness(response, problem, criteria);
 
   return {
@@ -407,7 +430,7 @@ function mutate(
 
 /**
  * Refine: apply targeted improvement to a high-fitness candidate.
- * Strengthens the response by amplifying problem-relevant content.
+ * Removes redundancy via TF-IDF similarity, tightens prose, removes fillers.
  */
 function refine(
   parent: EvolutionCandidate,
@@ -416,39 +439,29 @@ function refine(
   criteria: string[],
   id: string
 ): EvolutionCandidate {
-  const sentences = parent.response.split(/(?<=[.!?])\s+/).filter(s => s.trim().length > 5);
-
-  // Identify which criteria are least covered and boost them
-  const uncoveredCriteria = criteria.filter(c => {
-    const words = c.toLowerCase().split(/\s+/).filter(w => w.length > 3);
-    return !words.some(w => parent.response.toLowerCase().includes(w));
-  });
+  const sentences = splitSentences(parent.response);
 
   let response: string;
-  if (uncoveredCriteria.length > 0 && sentences.length > 1) {
-    // Duplicate and rephrase the strongest sentence to address gaps
-    const strongest = sentences.reduce((a, b) => a.length > b.length ? a : b);
-    const criteriaNote = `Considering ${uncoveredCriteria.slice(0, 2).join(" and ")}: ${strongest}`;
-    response = [...sentences, criteriaNote].join(" ");
-  } else if (sentences.length > 2) {
-    // Tighten: remove the most redundant sentence (most word overlap with others)
-    let maxOverlap = -1;
+  if (sentences.length > 2) {
+    // Remove the most redundant sentence: highest avg TF-IDF similarity to other sentences
+    let maxAvgSim = -1;
     let redundantIdx = 0;
     for (let i = 0; i < sentences.length; i++) {
-      const thisWords = new Set(sentences[i].toLowerCase().split(/\s+/));
-      let overlap = 0;
+      let totalSim = 0;
       for (let j = 0; j < sentences.length; j++) {
         if (i === j) continue;
-        const otherWords = new Set(sentences[j].toLowerCase().split(/\s+/));
-        overlap += [...thisWords].filter(w => otherWords.has(w)).length;
+        totalSim += tfidfCosineSimilarity(sentences[i], sentences[j]);
       }
-      if (overlap > maxOverlap) { maxOverlap = overlap; redundantIdx = i; }
+      const avgSim = totalSim / (sentences.length - 1);
+      if (avgSim > maxAvgSim) { maxAvgSim = avgSim; redundantIdx = i; }
     }
     const trimmed = [...sentences];
     trimmed.splice(redundantIdx, 1);
-    response = trimmed.join(" ");
+    // Also remove fillers from the result
+    response = removeFillers(trimmed.join(" "));
   } else {
-    response = parent.response;
+    // Short text: just remove fillers
+    response = removeFillers(parent.response);
   }
 
   const fitness = evaluateFitness(response, problem, criteria);

@@ -92,7 +92,7 @@ export function clusterSentences(
 }
 
 /** Merge a cluster of similar sentences into a single representative */
-export function mergeSentenceCluster(
+function mergeSentenceCluster(
   cluster: Array<{ text: string; hash: ContentHash }>
 ): { merged: string; originalHashes: ContentHash[] } {
   if (cluster.length === 0) return { merged: "", originalHashes: [] };

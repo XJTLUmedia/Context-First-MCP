@@ -269,14 +269,15 @@ All tool names use UNDERSCORES, not hyphens: memory_store, memory_recall, memory
 - [SANDBOX]: discover_tools, quarantine_context, merge_quarantine
 - [REASONING]: inftythink_reason, coconut_reason, extracot_compress, mindevolution_solve, kagthinker_solve
 - [TRUTHFULNESS]: probe_internal_state, detect_truth_direction, ncb_check, check_logical_consistency, verify_first, ioe_self_correct, self_critique
-- [PIPELINE]: research_pipeline — structured research orchestration with state and evidence gates
+- [PIPELINE]: research_pipeline — structured research orchestration with outline planning, quality gates, coverage tracking, and review tests (6 phases)
 - [EXPORT]: export_research_files — automatically writes verified report chunks and/or raw evidence batches to disk
 
 ### Research Task Quick Reference
-PREFERRED: Call research_pipeline with phase=init → then INTERLEAVE: (web search → gather) ×N → analyze → verify → finalize.
-CRITICAL: After EACH web search, IMMEDIATELY call gather. Do NOT batch searches. Write deeply in each gather call.
+PREFERRED: Call research_pipeline with phase=init → then INTERLEAVE: (web search → gather) ×N → review → (fix gathers) → analyze → verify → finalize.
+CRITICAL: After EACH web search, IMMEDIATELY call gather. Do NOT batch searches. Write deeply in each gather call — quality gate enforces 25K char / 500 line minimum per section — multiple gathers per section accumulate depth.
+NEW: plan→draft→review→fix loop — like compile→test→fix in coding. Init generates a research outline. Each gather drafts one section. Call review to run quality tests. Fix failed sections with targeted re-gathers. Coverage must reach 60% before analyze.
 The pipeline AUTOMATICALLY writes files to disk during gather, analyze, and finalize phases — no manual file creation needed. Files go to the outputDir you provide, or an auto-generated temp directory (reported in init). Finalize works even if verify hasn't passed (with a warning).
-This auto-chains all 34 underlying Context-First tool-equivalents. It does not fetch sources on its own, so pass sourced content into gather from web, GitHub, fetch, or other MCP tools. If you need individual tools instead:
+This auto-chains all 34 underlying Context-First tool-equivalents across 6 phases. It does not fetch sources on its own, so pass sourced content into gather from web, GitHub, fetch, or other MCP tools. If you need individual tools instead:
 Phase 1: context_loop → memory_recall (check prior knowledge)
 Phase 2: (2-3 searches) → memory_store (save findings) → context_loop (check health)
 Phase 3: Generate → context_loop (depth/truth check) → fix flagged sections
@@ -655,12 +656,13 @@ Minimal call: { "messages": [{"role":"user","content":"<user msg>","turn":1}] } 
     withBootstrapGate("self_critique", async (input: SelfCritiqueInput) => handleSelfCritique(store, input))
   );
 
-  // ─── Research Pipeline (auto-chains ALL layers in 5 phases) ───
+  // ─── Research Pipeline (auto-chains ALL layers in 6 phases) ───
   server.tool(
     "research_pipeline",
-    "[PIPELINE] RECOMMENDED for research tasks. Orchestrates all 34 underlying Context-First tool-equivalents through 5 phases (init→gather→analyze→verify→finalize). " +
+    "[PIPELINE] RECOMMENDED for research tasks. Orchestrates all 34 underlying Context-First tool-equivalents through 6 phases (init→gather→review→analyze→verify→finalize). " +
+    "NEW: plan→draft→review→fix loop — like compile→test→fix in coding. Init generates a research outline (12+ sections). Each gather adds depth to one section with quality gate (25K char / 500 line min — multiple gathers per section expected). Review runs quality tests and identifies gaps. " +
     "CRITICAL: Interleave web search and gather — after EACH search, IMMEDIATELY call gather with deeply written content. Do NOT batch searches. Each gather writes a file to disk. " +
-    "Each phase internally runs context_loop, state, sandbox, memory, reasoning, and truthfulness logic as needed. " +
+    "After sufficient gathers, call review to run quality tests. Fix failed sections by gathering again with metadata.targetSection=N. Coverage must reach 60% before analyze. " +
     "Autonomous file writing is ALWAYS ON — files are written to disk during gather, analyze, and finalize phases. Provide outputDir to control destination, or let the pipeline auto-create a temp directory. Finalize works even if verify hasn't passed. " +
     "It does not browse the web or invent source material for you; use it to structure, preserve, pressure-test, and export sourced findings collected from web, GitHub, fetch, or other MCP tools.",
     researchPipelineInputSchema.shape,
@@ -891,7 +893,7 @@ Minimal call: { "messages": [{"role":"user","content":"<user msg>","turn":1}] } 
     },
     {
       name: "research_pipeline",
-      description: "Structured research orchestration through 5 phases: init, gather, analyze, verify, finalize. Covers all 34 underlying tool-equivalents. CRITICAL: interleave web search and gather — after EACH search, IMMEDIATELY call gather with deeply written content. Each gather writes a file to disk.",
+      description: "Structured research orchestration through 6 phases: init, gather, review, analyze, verify, finalize. Outline-driven with per-section quality gates (25K char / 500 line min — multiple gathers accumulate depth). CRITICAL: interleave web search and gather — after EACH search, IMMEDIATELY call gather. Use metadata.targetSection=N to build depth in a section across multiple gathers.",
       inputSchema: researchPipelineInputSchema.shape,
       tags: ["pipeline", "research", "orchestration", "all-layers", "auto-chain", "comprehensive"],
     },
@@ -923,7 +925,7 @@ Minimal call: { "messages": [{"role":"user","content":"<user msg>","turn":1}] } 
 
   server.prompt(
     "research-protocol",
-    "Optimized protocol for deep research tasks. Provides step-by-step guidance for using context_loop, memory, and depth checking during research.",
+    "Optimized protocol for deep research tasks. 6-phase outline-driven workflow with quality gates, coverage tracking, and review→fix loop.",
     async () => ({
       messages: [
         {
@@ -932,14 +934,27 @@ Minimal call: { "messages": [{"role":"user","content":"<user msg>","turn":1}] } 
             type: "text" as const,
             text: `## Context-First Research Protocol
 
-RECOMMENDED: Use the research_pipeline tool which orchestrates all 34 underlying Context-First tool-equivalents:
-  research_pipeline(phase="init", content="your task") → then INTERLEAVE: (web search → phase="gather") ×N → phase="analyze" → phase="verify" → phase="finalize"
+RECOMMENDED: Use the research_pipeline tool which orchestrates all 34 underlying Context-First tool-equivalents across 6 phases.
+The workflow is like coding: plan → write → compile → check errors → fix → retest → ship.
+
+  research_pipeline(phase="init") → generates outline (12+ sections)
+  INTERLEAVE: (web search → phase="gather" with metadata.targetSection=N) ×N → each gather drafts one section
+  phase="review" → runs quality tests on all sections, identifies thin/missing sections
+  Fix failed sections: (web search → phase="gather" with metadata.targetSection=N) for each failure
+  phase="review" again → confirm fixes pass
+  phase="analyze" → deep reasoning engines (blocked if coverage < 60%)
+  phase="verify" → truth/evidence verification
+  phase="finalize" → export master synthesis + enriched chunks
+
+QUALITY GATES: Each section must reach 25K chars / 500 lines (accumulated across multiple gathers). Thin sections trigger QUALITY GATE FAILED — do another web search and call gather with metadata.targetSection=N to append more depth. Multiple gathers per section are expected, like iterating on code.
+COVERAGE TRACKING: The outline tracks which sections are drafted, passed, or missing. Coverage must reach 60% before analyze, 80% before review passes clean.
+REVIEW PHASE: Call review after gathering sufficient sections. It checks every section against quality thresholds and produces a fix list. Like running your test suite — fix failures, then re-review.
 
 CRITICAL WORKFLOW — Interleave search and gather:
   1. Do ONE web search on a specific topic
-  2. IMMEDIATELY call gather with deeply written research content based on that search
-  3. Gather writes a file to disk automatically — this is the core output
-  4. Repeat steps 1-3 for the next topic
+  2. IMMEDIATELY call gather with deeply written research content, targeting a section: metadata.targetSection=N
+  3. Gather writes a file to disk automatically and runs the quality gate
+  4. Repeat steps 1-3 for the next section
   Do NOT batch multiple searches before calling gather — context compaction will lose earlier results.
   You are a research AUTHOR: write comprehensive sections with facts, data, analysis, and expert commentary in each gather call.
 

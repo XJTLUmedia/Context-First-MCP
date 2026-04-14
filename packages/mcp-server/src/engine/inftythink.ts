@@ -1,6 +1,7 @@
 import { compareTwoStrings } from "string-similarity";
 import type { InftyThinkResult, InftyThinkSegment } from "../state/types.js";
 import { countTokens, truncateToTokenBudget } from "./tokenizer.js";
+import { splitSentences, rankSentencesByImportance, extractNouns } from "./nlp-utils.js";
 
 /**
  * InftyThink — Iterative Reasoning for Unlimited Depth
@@ -138,9 +139,9 @@ function processProvidedSegments(
 }
 
 /**
- * Analyze mode: Extract aspects from the problem, create structured
- * segments from the problem analysis, and prepare a carry-forward plan.
- * No fake reasoning is generated — only real text analysis.
+ * Analyze mode: Extract aspects from the problem, perform real extractive
+ * analysis on each aspect, and produce structured segments with computed insights.
+ * No prompt strings or LLM instructions are generated.
  */
 function analyzeAndPlan(
   problem: string,
@@ -158,22 +159,48 @@ function analyzeAndPlan(
   // Extract real aspects from the problem text
   const aspects = extractReasoningAspects(problem);
 
+  // Rank sentences by importance for extractive analysis
+  const rankedSentences = rankSentencesByImportance(problem);
+  const problemNouns = extractNouns(problem);
+
   for (let i = 0; i < Math.min(aspects.length, maxSegments); i++) {
     const aspect = aspects[i];
 
-    // Build a structured analysis stub for this aspect
+    // Build a real analysis for this aspect using NLP
     const parts: string[] = [];
     if (i === 0 && priorContext) {
       const priorSummary = compressToSummary(priorContext, 0.5);
       parts.push(`Prior context: ${priorSummary}`);
     }
     parts.push(`[Segment ${i}: ${aspect.label}]`);
-    parts.push(`Focus: ${aspect.label} (detected from problem text)`);
-    if (aspect.evidence.length > 0) {
-      parts.push(`Evidence: ${aspect.evidence.join("; ")}`);
+
+    // Real extractive analysis: select sentences relevant to this aspect
+    const aspectKeywords = aspect.label.toLowerCase().split(/\s+/);
+    const relevantSentences = rankedSentences.filter(s => {
+      const lower = s.toLowerCase();
+      return aspectKeywords.some(kw => lower.includes(kw));
+    });
+
+    if (relevantSentences.length > 0) {
+      parts.push(`Key findings for ${aspect.label}: ${relevantSentences.slice(0, 3).join(" ")}`);
     }
-    parts.push(`Carry-forward: ${carryForward || "(initial segment)"}`);
-    parts.push(`Instruction: Analyze "${truncate(problem, 80)}" focusing on ${aspect.label}. Budget: ${maxSegmentTokens} tokens.`);
+
+    if (aspect.evidence.length > 0) {
+      parts.push(`Evidence from text: ${aspect.evidence.join("; ")}`);
+    }
+
+    // Add topic-noun coverage for this aspect
+    const aspectNouns = problemNouns.filter(n =>
+      aspect.evidence.some(e => e.toLowerCase().includes(n)) ||
+      aspect.label.toLowerCase().includes(n)
+    );
+    if (aspectNouns.length > 0) {
+      parts.push(`Key concepts addressed: ${aspectNouns.join(", ")}`);
+    }
+
+    if (carryForward) {
+      parts.push(`Carry-forward from prior segments: ${truncate(carryForward, 120)}`);
+    }
 
     const reasoning = truncateToTokenBudget(parts.join("\n"), maxSegmentTokens);
     const tokenCount = countTokens(reasoning);
@@ -296,10 +323,7 @@ function buildResult(
  * to ~summaryRatio of its original length.
  */
 function compressToSummary(reasoning: string, ratio: number): string {
-  const sentences = reasoning
-    .split(/[.!?]+/)
-    .map(s => s.trim())
-    .filter(s => s.length > 10);
+  const sentences = splitSentences(reasoning).filter(s => s.length > 10);
 
   if (sentences.length === 0) return reasoning;
 
@@ -317,7 +341,9 @@ function compressToSummary(reasoning: string, ratio: number): string {
   // Re-order by original position
   kept.sort((a, b) => sentences.indexOf(a.sentence) - sentences.indexOf(b.sentence));
 
-  return kept.map(k => k.sentence).join(". ") + ".";
+  const result = kept.map(k => k.sentence).join(" ");
+  // Ensure summary is never longer than original
+  return result.length <= reasoning.length ? result : reasoning;
 }
 
 /**

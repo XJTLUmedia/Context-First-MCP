@@ -12,7 +12,7 @@ import { djb2Hash } from "./episode-store.js";
 let callbackCounter = 0;
 
 /** Generate trigger patterns from content */
-export function generateTriggerPatterns(content: string): string[] {
+function generateTriggerPatterns(content: string): string[] {
   const lower = content.toLowerCase();
   const patterns: string[] = [];
 

@@ -3,6 +3,7 @@ import type {
   TruthDirectionResult,
   TruthDirectionClaim,
 } from "../state/types.js";
+import { splitSentences, compareTwoStrings } from "./nlp-utils.js";
 
 /**
  * Truth Direction Analysis — inspired by "Consistency and Generalization of Truth Directions in LLMs".
@@ -52,10 +53,7 @@ const SOURCE_PATTERNS = [
  * Extract declarative claims from text (sentences that assert facts).
  */
 function extractDeclarativeClaims(text: string): string[] {
-  const sentences = text
-    .split(/(?<=[.!?])\s+/)
-    .map(s => s.trim())
-    .filter(s => s.length > 15);
+  const sentences = splitSentences(text).filter(s => s.length > 15);
 
   return sentences.filter(s => {
     if (s.endsWith("?")) return false;
@@ -165,7 +163,7 @@ function computeFactConsistencyFeature(
   if (groundTruth.size === 0) return 0;
 
   const textLower = text.toLowerCase();
-  let aligned = 0;
+  let totalAlignment = 0;
   let checked = 0;
 
   for (const [key, entry] of groundTruth) {
@@ -175,13 +173,29 @@ function computeFactConsistencyFeature(
 
     checked++;
     const valueStr = String(entry.value).toLowerCase();
-    if (textLower.includes(valueStr) ||
-        valueStr.split(/\s+/).filter(v => v.length > 2 && textLower.includes(v)).length > 0) {
-      aligned++;
+
+    // Direct substring containment (strongest signal)
+    if (textLower.includes(valueStr)) {
+      totalAlignment += 1.0;
+      continue;
     }
+
+    // Extract sentences relevant to this fact for focused comparison
+    const sentences = splitSentences(text);
+    const relevantSentences = sentences.filter(s =>
+      keyParts.some(p => p.length > 2 && s.toLowerCase().includes(p))
+    );
+
+    if (relevantSentences.length === 0) continue;
+
+    // Best Dice match at sentence level for paraphrased values
+    const bestAlignment = Math.max(
+      ...relevantSentences.map(s => compareTwoStrings(s.toLowerCase(), valueStr))
+    );
+    totalAlignment += bestAlignment;
   }
 
-  return checked > 0 ? aligned / checked : 0;
+  return checked > 0 ? totalAlignment / checked : 0;
 }
 
 function computeLinguisticConfidenceFeature(text: string): number {
@@ -203,7 +217,7 @@ function computeLinguisticConfidenceFeature(text: string): number {
 }
 
 function computeLogicalCoherenceFeature(text: string): number {
-  const sentences = text.split(/(?<=[.!?])\s+/).filter(s => s.length > 10);
+  const sentences = splitSentences(text).filter(s => s.length > 10);
   if (sentences.length <= 1) return 0.8;
 
   let contradictions = 0;
@@ -277,16 +291,15 @@ function computeCrossClaimConsistency(
   allClaims: string[],
   priorOutputs: string[]
 ): number {
-  const claimTokens = new Set(tokenize(claim));
   let consistentPairs = 0;
   let totalPairs = 0;
 
   const allTexts = [...allClaims, ...priorOutputs];
   for (const other of allTexts) {
     if (other === claim) continue;
-    const otherTokens = new Set(tokenize(other));
-    const shared = [...claimTokens].filter(t => otherTokens.has(t));
-    if (shared.length < 2) continue;
+    // Use Dice coefficient to check topical overlap
+    const similarity = compareTwoStrings(claim.toLowerCase(), other.toLowerCase());
+    if (similarity < 0.15) continue; // unrelated texts, skip
 
     totalPairs++;
     // Check if both are asserting compatible things
@@ -296,12 +309,9 @@ function computeCrossClaimConsistency(
     if (claimNeg === otherNeg) {
       consistentPairs++;
     } else {
-      // Check if negation targets the shared content
-      const sharedStr = shared.join(" ");
-      const claimMentionsShared = claim.toLowerCase().includes(sharedStr);
-      const otherMentionsShared = other.toLowerCase().includes(sharedStr);
-      if (claimMentionsShared && otherMentionsShared) {
-        // Real contradiction
+      // Deeper check: high similarity + opposing polarity = real contradiction
+      if (similarity > 0.4) {
+        // Real contradiction — don't count as consistent
       } else {
         consistentPairs += 0.7; // Different topics, less concerning
       }
@@ -362,13 +372,6 @@ function generateWarnings(
 }
 
 // ─── Utilities ───
-
-function tokenize(text: string): string[] {
-  return text
-    .toLowerCase()
-    .split(/\W+/)
-    .filter(w => w.length > 2);
-}
 
 function avg(values: number[]): number {
   return values.length > 0 ? values.reduce((s, v) => s + v, 0) / values.length : 0;

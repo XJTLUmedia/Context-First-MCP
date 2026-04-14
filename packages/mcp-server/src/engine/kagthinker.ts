@@ -1,6 +1,12 @@
 import { DirectedGraph } from "graphology";
 import { topologicalSort as graphTopologicalSort } from "graphology-dag";
 import type { KAGThinkerResult, LogicalForm } from "../state/types.js";
+import {
+  splitSentences,
+  tfidfCosineSimilarity,
+  extractNouns,
+  extractEntities,
+} from "./nlp-utils.js";
 
 /**
  * KAG-Thinker — Structured Interactive Thinking (2025)
@@ -370,8 +376,9 @@ function resolveLogicalForm(
 }
 
 /**
- * Analyze a logical form's content using real text examination.
- * Returns findings based on actual content analysis, not templates.
+ * Analyze a logical form's content using real NLP examination.
+ * Uses compromise for entity/noun extraction and natural for TF-IDF
+ * similarity to produce grounded findings rather than template text.
  */
 function analyzeFormContent(
   form: LogicalForm,
@@ -380,112 +387,190 @@ function analyzeFormContent(
   knownFacts: string[]
 ): string {
   const desc = form.description;
-  const keyTerms = extractKeyTerms(desc);
 
-  const contextSummary = depResults.length > 0
-    ? `From ${depResults.length} resolved dependencies: ${depResults.map(r => truncate(r, 50)).join("; ")}. `
+  // Real NLP extraction from the form description
+  const nouns = extractNouns(desc);
+  const entities = extractEntities(desc);
+  const allEntities = [...entities.people, ...entities.places, ...entities.organizations];
+
+  // Build context from resolved dependencies
+  const depContext = depResults.length > 0
+    ? depResults.map(r => truncate(r, 60)).join("; ")
     : "";
-  const factSummary = knownFacts.length > 0
-    ? `Grounded against ${knownFacts.length} known fact(s). `
-    : "";
+
+  // Check grounding against known facts via TF-IDF similarity
+  let groundingNote = "";
+  if (knownFacts.length > 0) {
+    const sims = knownFacts.map(f => ({
+      fact: f,
+      sim: tfidfCosineSimilarity(f, desc),
+    }));
+    const relevant = sims.filter(s => s.sim > 0.1).sort((a, b) => b.sim - a.sim);
+    if (relevant.length > 0) {
+      groundingNote = `Grounded by: ${relevant.slice(0, 2).map(r => truncate(r.fact, 40)).join("; ")}.`;
+    }
+  }
 
   // Real analysis based on operation type
+  const parts: string[] = [];
+
   switch (operation) {
     case "SOLVE":
-      return `${contextSummary}${factSummary}Combined results from ${depResults.length} sub-problems addressing: ${keyTerms.join(", ")}.`;
+      parts.push(`Integrated solution from ${depResults.length} resolved sub-problems.`);
+      if (depContext) parts.push(`Sub-results: ${depContext}.`);
+      if (nouns.length > 0) parts.push(`Core topics: ${nouns.slice(0, 4).join(", ")}.`);
+      break;
 
     case "ANALYZE":
-    case "EVALUATE":
-      return `${contextSummary}${factSummary}Analysis of "${truncate(desc, 50)}" identified key terms: ${keyTerms.join(", ")}. ` +
-        `${keyTerms.length} distinct concepts detected in the problem space.`;
+    case "EVALUATE": {
+      const sentences = splitSentences(desc);
+      parts.push(`Analyzed ${sentences.length} sentence(s) in "${truncate(desc, 50)}".`);
+      if (nouns.length > 0) parts.push(`Extracted concepts: ${nouns.slice(0, 5).join(", ")}.`);
+      if (allEntities.length > 0) parts.push(`Named entities: ${allEntities.slice(0, 3).join(", ")}.`);
+      if (depContext) parts.push(`Dependency context: ${depContext}.`);
+      break;
+    }
 
     case "DEFINE":
     case "EXTRACT_CONCEPTS":
-      return `${contextSummary}${factSummary}Concepts extracted: ${keyTerms.join(", ")}. ` +
-        `${keyTerms.length} domain-specific terms identified for definition.`;
+      if (nouns.length > 0) {
+        parts.push(`Extracted ${nouns.length} concept(s): ${nouns.join(", ")}.`);
+      } else {
+        parts.push(`No distinct domain concepts extracted from "${truncate(desc, 50)}".`);
+      }
+      if (allEntities.length > 0) parts.push(`Named entities found: ${allEntities.join(", ")}.`);
+      break;
 
     case "CLASSIFY":
-      return `${contextSummary}${factSummary}Classification of ${keyTerms.length} extracted concepts by domain relevance.`;
+      parts.push(`Classification of ${nouns.length} concept(s) by domain relevance.`);
+      if (depContext) parts.push(`Prior extractions: ${depContext}.`);
+      break;
 
     case "ENUMERATE_METHODS":
     case "METHOD":
-      return `${contextSummary}${factSummary}Enumeration of approaches for "${truncate(desc, 40)}". ` +
-        `Each approach requires evaluation against problem constraints.`;
+      parts.push(`Method enumeration for "${truncate(desc, 40)}".`);
+      if (nouns.length > 0) parts.push(`Domain concepts involved: ${nouns.slice(0, 4).join(", ")}.`);
+      if (depContext) parts.push(`Prior findings: ${depContext}.`);
+      break;
 
     case "EVALUATE_FEASIBILITY":
     case "SELECT_OPTIMAL":
-      return `${contextSummary}${factSummary}Feasibility evaluation for "${truncate(desc, 40)}". ` +
-        `Selection criteria derived from ${depResults.length} dependency results and ${knownFacts.length} known facts.`;
+      parts.push(`Feasibility evaluation based on ${depResults.length} dependency result(s) and ${knownFacts.length} known fact(s).`);
+      if (depContext) parts.push(`Evaluation inputs: ${depContext}.`);
+      break;
 
     case "TRACE_CAUSES":
     case "CAUSE":
-      return `${contextSummary}${factSummary}Causal chain analysis for "${truncate(desc, 40)}". ` +
-        `Tracing cause-effect relationships from available context.`;
+      parts.push(`Causal analysis for "${truncate(desc, 40)}".`);
+      if (nouns.length >= 2) {
+        parts.push(`Potential causal chain: ${nouns[0]} → ${nouns.slice(1).join(" → ")}.`);
+      }
+      if (depContext) parts.push(`Supporting context: ${depContext}.`);
+      break;
 
     case "VALIDATE_CAUSATION":
-      return `${contextSummary}${factSummary}Causal validation: examining whether identified causal relationships hold given available evidence.`;
+      parts.push(`Causal validation against ${knownFacts.length} known fact(s).`);
+      if (depContext) parts.push(`Claims to validate: ${depContext}.`);
+      break;
 
     case "COMPARE":
     case "LIST_ALTERNATIVES":
     case "EVALUATE_CRITERIA":
-      return `${contextSummary}${factSummary}Comparison framework for "${truncate(desc, 40)}". ` +
-        `${keyTerms.length} comparison dimensions identified from problem text.`;
+      parts.push(`Comparison analysis for "${truncate(desc, 40)}".`);
+      if (nouns.length >= 2) {
+        parts.push(`Comparison dimensions: ${nouns.join(" vs ")}.`);
+      }
+      if (depContext) parts.push(`Comparison inputs: ${depContext}.`);
+      break;
 
     case "PROJECT_OUTCOMES":
     case "IMPACT":
     case "ASSESS_RISK":
-      return `${contextSummary}${factSummary}Impact/risk assessment for "${truncate(desc, 40)}". ` +
-        `Risk factors derived from ${depResults.length} resolved dependencies.`;
+      parts.push(`Impact assessment for "${truncate(desc, 40)}".`);
+      if (depContext) parts.push(`Risk factors from dependencies: ${depContext}.`);
+      break;
 
     case "VERIFY":
-    case "CHECK_CONSISTENCY":
-      return `${contextSummary}${factSummary}Consistency check across ${depResults.length} resolved forms. ` +
-        `No contradictions detected in available results.`;
+    case "CHECK_CONSISTENCY": {
+      // Actually check consistency between dependency results
+      let contradictionFound = false;
+      for (let i = 0; i < depResults.length && !contradictionFound; i++) {
+        for (let j = i + 1; j < depResults.length; j++) {
+          const sim = tfidfCosineSimilarity(depResults[i], depResults[j]);
+          if (sim < 0.05 && depResults[i].length > 20 && depResults[j].length > 20) {
+            parts.push(`Low coherence detected between sub-results ${i} and ${j} (similarity: ${round(sim)}).`);
+            contradictionFound = true;
+            break;
+          }
+        }
+      }
+      if (!contradictionFound) {
+        parts.push(`Consistency verified across ${depResults.length} sub-results.`);
+      }
+      break;
+    }
 
     case "CHECK_COMPLETENESS":
-      return `${contextSummary}${factSummary}Completeness check: ${depResults.length} sub-problems addressed out of identified scope.`;
+      parts.push(`Completeness check: ${depResults.length} sub-problem(s) addressed.`);
+      break;
 
     case "DECOMPOSE":
-      return `${contextSummary}${factSummary}Structural decomposition of "${truncate(desc, 40)}" into ${keyTerms.length} components.`;
+      parts.push(`Decomposition of "${truncate(desc, 40)}" into ${nouns.length} component(s): ${nouns.join(", ")}.`);
+      break;
 
     case "SYNTHESIZE":
-      return `${contextSummary}${factSummary}Synthesis of ${depResults.length} resolved components into integrated result.`;
+      parts.push(`Synthesis of ${depResults.length} resolved component(s).`);
+      if (depContext) parts.push(`Integrated from: ${depContext}.`);
+      break;
 
     default:
-      return `${contextSummary}${factSummary}Analysis of "${truncate(desc, 40)}" using ${operation} approach. Key terms: ${keyTerms.join(", ")}.`;
+      parts.push(`${operation} analysis of "${truncate(desc, 40)}".`);
+      if (nouns.length > 0) parts.push(`Key concepts: ${nouns.join(", ")}.`);
+      break;
   }
+
+  if (groundingNote) parts.push(groundingNote);
+
+  return parts.join(" ");
 }
 
 /**
- * Compute resolution confidence based on result quality and grounding.
+ * Compute resolution confidence based on evidence strength.
+ * Uses TF-IDF similarity against known facts for grounding,
+ * and structural metrics (not self-planted keywords).
  */
 function computeResolutionConfidence(
   result: string,
   form: LogicalForm,
   knownFacts: string[]
 ): number {
-  let confidence = 0.6; // Base confidence
+  let confidence = 0.5; // Lower base — must earn confidence through evidence
 
-  // Boost for specific content
-  if (/\b\d+\.?\d*%?\b/.test(result)) confidence += 0.1;
-  if (/\b(?:conclude|determine|confirm|verify)\b/i.test(result)) confidence += 0.1;
-
-  // Boost for fact grounding
+  // Grounding: TF-IDF similarity between result and known facts
   if (knownFacts.length > 0) {
-    const resultLower = result.toLowerCase();
-    const grounded = knownFacts.some(fact =>
-      fact.toLowerCase().split(/\s+/).some(w => w.length > 4 && resultLower.includes(w))
-    );
-    if (grounded) confidence += 0.15;
+    const sims = knownFacts.map(f => tfidfCosineSimilarity(f, result));
+    const maxSim = Math.max(...sims);
+    const avgSim = sims.reduce((a, b) => a + b, 0) / sims.length;
+    confidence += maxSim * 0.2 + avgSim * 0.1;
   }
 
-  // Penalty for shallow forms
-  if (result.split(/\s+/).length < 10) confidence -= 0.1;
+  // Structural quality: result length signals analysis depth
+  const wordCount = result.split(/\s+/).length;
+  if (wordCount >= 20) confidence += 0.1;
+  if (wordCount >= 40) confidence += 0.05;
 
-  // Depth penalty (deeper = less certain)
+  // Penalty for very shallow results
+  if (wordCount < 10) confidence -= 0.15;
+
+  // Depth penalty (deeper = more uncertainty)
   confidence -= form.depth * 0.05;
 
-  return Math.max(0.3, Math.min(1, confidence));
+  // NLP content quality: does result contain real extracted nouns?
+  const nouns = extractNouns(result);
+  if (nouns.length >= 3) confidence += 0.1;
+  else if (nouns.length >= 1) confidence += 0.05;
+
+  return Math.max(0.2, Math.min(1, confidence));
 }
 
 /**
@@ -576,14 +661,6 @@ function extractClause(text: string, keywords: string[]): string {
     }
   }
   return text.slice(0, 60);
-}
-
-function extractKeyTerms(text: string): string[] {
-  return text
-    .split(/\s+/)
-    .filter(w => w.length > 4)
-    .filter(w => !/^(?:the|and|for|with|from|that|this|which|about|their|these|those)$/i.test(w))
-    .slice(0, 5);
 }
 
 function truncate(text: string, maxLen: number): string {

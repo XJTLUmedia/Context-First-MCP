@@ -2,6 +2,14 @@ import type {
   NCBResult,
   NCBPerturbation,
 } from "../state/types.js";
+import {
+  splitSentences,
+  tfidfCosineSimilarity,
+  extractNouns,
+  paraphraseText,
+  extractEntities,
+  compareTwoStrings,
+} from "./nlp-utils.js";
 
 /**
  * Neighbor-Consistency Belief (NCB) — inspired by
@@ -37,7 +45,7 @@ export function checkNeighborhoodConsistency(
     evaluatePerturbation(p, response, knownFacts)
   );
 
-  const ncbScore = computeNCBScore(evaluatedPerturbations);
+  const ncbScore = computeNCBScore(evaluatedPerturbations, knownFacts, response);
   const { brittleAreas, robustAreas } = identifyAreas(evaluatedPerturbations, response);
 
   const coherentCount = evaluatedPerturbations.filter(p => p.isCoherent).length;
@@ -148,23 +156,45 @@ function generateParaphrase(query: string): string {
   }
 
   if (paraphrased === query) {
-    paraphrased = `Rephrase: ${query}`;
+    // Use NLP-based paraphrasing instead of a prompt string
+    paraphrased = paraphraseText(query);
+  }
+
+  // If still unchanged, apply a structural transformation
+  if (paraphrased === query) {
+    const sentences = splitSentences(query);
+    if (sentences.length > 1) {
+      paraphrased = sentences.reverse().join(" ");
+    } else {
+      // Last resort: prepend topic framing
+      const nouns = extractNouns(query);
+      paraphrased = nouns.length > 0
+        ? `Regarding ${nouns[0]}, ${query.charAt(0).toLowerCase()}${query.slice(1)}`
+        : query;
+    }
   }
 
   return paraphrased;
 }
 
 function generateImplication(response: string): string {
-  const sentences = response.split(/(?<=[.!?])\s+/).filter(s => s.length > 10);
-  if (sentences.length === 0) return `If the above is true, then what follows?`;
+  const sentences = splitSentences(response);
+  if (sentences.length === 0) return response;
 
+  // Pick the most assertive sentence (first claim)
   const firstClaim = sentences[0];
-  // Generate a logical implication of the first claim
-  const words = firstClaim.split(/\s+/);
-  if (words.length > 5) {
-    return `Given that ${firstClaim.replace(/\.$/, "")}, what are the implications?`;
+  const nouns = extractNouns(firstClaim);
+
+  if (nouns.length >= 2) {
+    // Construct a logical implication: "If [noun1], then [noun2] follows"
+    return `If ${nouns[0]} holds, then ${nouns.slice(1).join(" and ")} would follow from the stated reasoning.`;
   }
-  return `If ${firstClaim.replace(/\.$/, "")}, then what follows?`;
+  if (nouns.length === 1) {
+    return `The presence of ${nouns[0]} implies related downstream effects in this context.`;
+  }
+  // Fallback: Extract the core assertion and restate as consequence
+  const core = firstClaim.replace(/\.$/, "");
+  return `As a consequence of the above, ${core.charAt(0).toLowerCase()}${core.slice(1)}.`;
 }
 
 function generateNegation(query: string): string {
@@ -183,17 +213,39 @@ function generateNegation(query: string): string {
 }
 
 function generateThematicShift(query: string): string {
-  const topics = extractTopics(query);
-  if (topics.length > 0) {
-    return `How does ${topics[0]} relate to adjacent concepts in this domain?`;
+  const nouns = extractNouns(query);
+  const entities = extractEntities(query);
+  const allEntities = [...entities.people, ...entities.places, ...entities.organizations];
+
+  if (allEntities.length > 0 && nouns.length > 0) {
+    // Shift from entity focus to broader topic
+    return `The role of ${nouns[0]} in the broader context beyond ${allEntities[0]}.`;
+  }
+  if (nouns.length >= 2) {
+    // Shift focus from first noun to second noun
+    return `Considering ${nouns[1]} rather than ${nouns[0]} as the primary factor in this context.`;
+  }
+  if (nouns.length === 1) {
+    return `The broader context surrounding ${nouns[0]} and its adjacent domains.`;
   }
   return `From a different perspective: ${query}`;
 }
 
 function generateSpecificityChange(query: string): string {
-  const topics = extractTopics(query);
-  if (topics.length > 0) {
-    return `Specifically regarding ${topics[0]}, what are the exact details and constraints?`;
+  const nouns = extractNouns(query);
+  const entities = extractEntities(query);
+  const allEntities = [...entities.people, ...entities.places, ...entities.organizations];
+
+  if (nouns.length > 0 && allEntities.length > 0) {
+    // Make more specific by combining topic with entity
+    return `The specific constraints and measurable details of ${nouns[0]} as it applies to ${allEntities[0]}.`;
+  }
+  if (nouns.length >= 2) {
+    // Narrow scope to the intersection of two topics
+    return `The precise relationship between ${nouns[0]} and ${nouns[1]}, including quantitative boundaries and defined constraints.`;
+  }
+  if (nouns.length === 1) {
+    return `The exact parameters, defined boundaries, and measurable criteria of ${nouns[0]}.`;
   }
   return `In precise terms: ${query}`;
 }
@@ -235,46 +287,40 @@ function computeConsistencyScore(
   response: string,
   knownFacts: string[]
 ): number {
-  const responseTokens = new Set(tokenize(response));
-  const perturbedTokens = tokenize(perturbation.perturbedText);
-
-  // Token overlap between perturbation and response
-  const overlap = perturbedTokens.filter(t => responseTokens.has(t)).length;
-  const overlapRatio = perturbedTokens.length > 0
-    ? overlap / perturbedTokens.length
-    : 0;
+  // Blend TF-IDF (good for long text) with Dice coefficient (good for short text)
+  const tfidfSim = tfidfCosineSimilarity(perturbation.perturbedText, response);
+  const diceSim = compareTwoStrings(
+    perturbation.perturbedText.toLowerCase(),
+    response.toLowerCase()
+  );
+  const textSim = 0.6 * tfidfSim + 0.4 * diceSim;
 
   // Fact alignment: do known facts support consistency?
-  let factSupport = 0.5;
+  let factSupport = 0.3; // Lower default — absence of facts is a penalty
   if (knownFacts.length > 0) {
-    const responseLower = response.toLowerCase();
-    const supportedFacts = knownFacts.filter(f =>
-      f.toLowerCase().split(/\s+/).some(w => w.length > 3 && responseLower.includes(w))
-    );
-    factSupport = supportedFacts.length / knownFacts.length;
+    const factSims = knownFacts.map(f => {
+      const ftfidf = tfidfCosineSimilarity(f, response);
+      const fdice = compareTwoStrings(f.toLowerCase(), response.toLowerCase());
+      return 0.5 * ftfidf + 0.5 * fdice;
+    });
+    factSupport = factSims.reduce((a, b) => a + b, 0) / knownFacts.length;
   }
-
-  // Semantic similarity via token jaccard
-  const perturbedSet = new Set(perturbedTokens);
-  const union = new Set([...responseTokens, ...perturbedSet]);
-  const intersection = [...responseTokens].filter(t => perturbedSet.has(t));
-  const jaccard = union.size > 0 ? intersection.length / union.size : 0;
 
   // Composition based on perturbation type
   switch (perturbation.type) {
     case "paraphrase":
-      return 0.4 * overlapRatio + 0.3 * jaccard + 0.3 * factSupport;
+      return 0.6 * textSim + 0.4 * factSupport;
     case "implication":
-      return 0.3 * overlapRatio + 0.4 * factSupport + 0.3 * jaccard;
+      return 0.4 * textSim + 0.6 * factSupport;
     case "negation":
-      // For negation, high overlap is BAD (means response doesn't distinguish)
-      return overlapRatio;
+      // For negation, high similarity is BAD (means response doesn't distinguish)
+      return textSim;
     case "thematic_shift":
-      return 0.5 * jaccard + 0.5 * factSupport;
+      return 0.5 * textSim + 0.5 * factSupport;
     case "specificity_change":
-      return 0.4 * overlapRatio + 0.3 * jaccard + 0.3 * factSupport;
+      return 0.5 * textSim + 0.5 * factSupport;
     default:
-      return 0.33 * overlapRatio + 0.33 * jaccard + 0.34 * factSupport;
+      return 0.5 * textSim + 0.5 * factSupport;
   }
 }
 
@@ -287,8 +333,8 @@ function identifyAreas(
   const brittleAreas: string[] = [];
   const robustAreas: string[] = [];
 
-  const sentences = response.split(/(?<=[.!?])\s+/).filter(s => s.length > 10);
-  const topics = extractTopics(response);
+  const sentences = splitSentences(response).filter(s => s.length > 10);
+  const topics = extractNouns(response);
 
   for (const p of perturbations) {
     const topicStr = topics.length > 0 ? topics[0] : "general content";
@@ -311,11 +357,12 @@ function identifyAreas(
 
 // ─── NCB Score Computation ───
 
-function computeNCBScore(perturbations: NCBPerturbation[]): number {
+function computeNCBScore(
+  perturbations: NCBPerturbation[],
+  knownFacts: string[],
+  response: string
+): number {
   if (perturbations.length === 0) return 1.0;
-
-  const coherentCount = perturbations.filter(p => p.isCoherent).length;
-  const baseScore = coherentCount / perturbations.length;
 
   // Weight by perturbation type importance
   const typeWeights: Record<string, number> = {
@@ -331,11 +378,34 @@ function computeNCBScore(perturbations: NCBPerturbation[]): number {
 
   for (const p of perturbations) {
     const weight = typeWeights[p.type] ?? 1.0;
-    weightedSum += (p.isCoherent ? 1 : 0) * weight;
+    // Use continuous score: how well did the perturbation meet expectations?
+    let score: number;
+    if (p.expectedConsistency === "high") {
+      score = p.actualConsistency; // Higher is better
+    } else if (p.expectedConsistency === "low") {
+      score = 1 - p.actualConsistency; // Lower consistency is better for negations
+    } else {
+      // Medium: penalize extremes
+      score = 1 - Math.abs(p.actualConsistency - 0.5) * 2;
+    }
+    weightedSum += score * weight;
     totalWeight += weight;
   }
 
-  return totalWeight > 0 ? weightedSum / totalWeight : baseScore;
+  let base = totalWeight > 0 ? weightedSum / totalWeight : 0.5;
+
+  // Fact-grounding bonus: responses backed by known facts are more trustworthy
+  if (knownFacts.length > 0) {
+    const factSims = knownFacts.map(f => {
+      const tSim = tfidfCosineSimilarity(f, response);
+      const dSim = compareTwoStrings(f.toLowerCase(), response.toLowerCase());
+      return 0.5 * tSim + 0.5 * dSim;
+    });
+    const avgFactSim = factSims.reduce((a, b) => a + b, 0) / factSims.length;
+    base += avgFactSim * 0.2; // Up to +0.2 for strong fact grounding
+  }
+
+  return Math.max(0, Math.min(1, base));
 }
 
 // ─── Genuine Knowledge Confidence ───
@@ -409,32 +479,6 @@ function generateRecommendations(
 }
 
 // ─── Utilities ───
-
-function extractTopics(text: string): string[] {
-  const stopWords = new Set([
-    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-    "have", "has", "had", "do", "does", "did", "will", "would", "could",
-    "should", "may", "might", "can", "shall", "this", "that", "these",
-    "those", "it", "its", "and", "or", "but", "not", "no", "with",
-    "from", "for", "to", "of", "in", "on", "at", "by", "as", "what",
-    "how", "why", "when", "where", "which", "who", "whom",
-  ]);
-
-  const words = text.toLowerCase().split(/\W+/).filter(w => w.length > 3 && !stopWords.has(w));
-  const freq = new Map<string, number>();
-  for (const w of words) {
-    freq.set(w, (freq.get(w) ?? 0) + 1);
-  }
-
-  return [...freq.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5)
-    .map(([word]) => word);
-}
-
-function tokenize(text: string): string[] {
-  return text.toLowerCase().split(/\W+/).filter(w => w.length > 2);
-}
 
 function round(n: number): number {
   return Math.round(n * 100) / 100;

@@ -4,6 +4,7 @@ import type {
   IoEConfidenceAssessment,
   IoECorrection,
 } from "../state/types.js";
+import { splitSentences, compareTwoStrings } from "./nlp-utils.js";
 
 /**
  * If-or-Else (IoE) Confidence-Based Self-Correction — inspired by
@@ -169,8 +170,8 @@ function computeFactualRisk(response: string): number {
     if (matches) riskCount += matches.length;
   }
 
-  const sentences = response.split(/(?<=[.!?])\s+/).length;
-  const riskDensity = sentences > 0 ? riskCount / sentences : 0;
+  const sentenceCount = splitSentences(response).length || 1;
+  const riskDensity = riskCount / sentenceCount;
   return Math.min(1, riskDensity);
 }
 
@@ -181,7 +182,8 @@ function computeGroundTruthAlignment(
   if (groundTruth.size === 0) return 0.5;
 
   const responseLower = response.toLowerCase();
-  let alignedFacts = 0;
+  const sentences = splitSentences(response);
+  let totalAlignment = 0;
   let checkedFacts = 0;
 
   for (const [key, entry] of groundTruth) {
@@ -191,21 +193,32 @@ function computeGroundTruthAlignment(
 
     checkedFacts++;
     const valueStr = String(entry.value).toLowerCase();
-    const valueTokens = valueStr.split(/\s+/).filter(v => v.length > 2);
-    const matched = valueTokens.filter(v => responseLower.includes(v)).length;
-    const alignment = valueTokens.length > 0 ? matched / valueTokens.length : 0;
 
-    if (alignment > 0.3) alignedFacts++;
+    // Direct substring containment (strongest signal for factual values)
+    if (responseLower.includes(valueStr)) {
+      totalAlignment += 1.0;
+      continue;
+    }
+
+    // Extract sentences relevant to this fact's topic for focused comparison
+    const relevantSentences = sentences.filter(s =>
+      keyParts.some(p => p.length > 2 && s.toLowerCase().includes(p))
+    );
+
+    if (relevantSentences.length === 0) continue;
+
+    // Best Dice match at sentence level for paraphrased values
+    const bestAlignment = Math.max(
+      ...relevantSentences.map(s => compareTwoStrings(s.toLowerCase(), valueStr))
+    );
+    totalAlignment += bestAlignment;
   }
 
-  return checkedFacts > 0 ? alignedFacts / checkedFacts : 0.5;
+  return checkedFacts > 0 ? totalAlignment / checkedFacts : 0.5;
 }
 
 function computeResponseConsistency(response: string): number {
-  const sentences = response
-    .split(/(?<=[.!?])\s+/)
-    .map(s => s.trim())
-    .filter(s => s.length > 10);
+  const sentences = splitSentences(response).filter(s => s.length > 10);
 
   if (sentences.length <= 1) return 0.9;
 
@@ -224,13 +237,22 @@ function computeResponseConsistency(response: string): number {
 
 function computeQuestionRelevance(response: string, question: string): number {
   if (!question) return 0.5;
+  if (question.trim().length === 0) return 0.5;
 
-  const qTokens = tokenize(question);
-  const rTokens = new Set(tokenize(response));
+  const sentences = splitSentences(response).filter(s => s.length > 10);
+  if (sentences.length === 0) return 0.5;
 
-  if (qTokens.length === 0) return 0.5;
-  const relevant = qTokens.filter(t => rTokens.has(t)).length;
-  return relevant / qTokens.length;
+  const questionLower = question.toLowerCase();
+
+  // Best sentence-level Dice match (focused relevance)
+  const bestSentenceScore = Math.max(
+    ...sentences.map(s => compareTwoStrings(s.toLowerCase(), questionLower))
+  );
+
+  // Overall response-question Dice (broad relevance)
+  const overallDice = compareTwoStrings(response.toLowerCase(), questionLower);
+
+  return 0.6 * bestSentenceScore + 0.4 * overallDice;
 }
 
 function detectContradiction(a: string, b: string): boolean {
@@ -253,10 +275,7 @@ function generateCorrections(
   assessment: IoEConfidenceAssessment
 ): IoECorrection[] {
   const corrections: IoECorrection[] = [];
-  const sentences = response
-    .split(/(?<=[.!?])\s+/)
-    .map(s => s.trim())
-    .filter(s => s.length > 10);
+  const sentences = splitSentences(response).filter(s => s.length > 10);
 
   for (const sentence of sentences) {
     const sentenceLower = sentence.toLowerCase();
@@ -311,7 +330,6 @@ function hasAlternativeValue(
   entry: GroundTruthEntry
 ): boolean {
   const correctValue = String(entry.value).toLowerCase();
-  const correctTokens = correctValue.split(/\s+/).filter(t => t.length > 2);
 
   // If the sentence has number/date and ground truth has number/date,
   // check if they differ
@@ -322,21 +340,15 @@ function hasAlternativeValue(
     return !sentenceNumbers.some(n => correctNumbers.includes(n));
   }
 
-  // Generic: insufficient overlap with correct value
-  const matchCount = correctTokens.filter(t => sentenceLower.includes(t)).length;
-  return correctTokens.length > 0 && matchCount / correctTokens.length < 0.3;
+  // Use Dice coefficient: low similarity to correct value = likely alternative value
+  const similarity = compareTwoStrings(sentenceLower, correctValue);
+  return similarity < 0.25;
 }
 
 // ─── Correction Application ───
 
 function applyCorrections(response: string, corrections: IoECorrection[]): string {
   if (corrections.length === 0) return response;
-
-  let corrected = response;
-  for (const correction of corrections) {
-    // Append corrections as annotations rather than modifying in-place
-    // to preserve the original for comparison
-  }
 
   const correctionSummary = corrections
     .map(c => `• ${c.reason}`)
@@ -452,10 +464,6 @@ function extractTopicWords(text: string): string[] {
     "from", "for", "to", "of", "in", "on", "at", "by", "as",
   ]);
   return text.toLowerCase().split(/\W+/).filter(w => w.length > 2 && !stopWords.has(w));
-}
-
-function tokenize(text: string): string[] {
-  return text.toLowerCase().split(/\W+/).filter(w => w.length > 2);
 }
 
 function truncate(text: string, maxLen = 60): string {

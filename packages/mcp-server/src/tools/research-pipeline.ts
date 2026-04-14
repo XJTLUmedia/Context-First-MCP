@@ -1,4 +1,4 @@
-import { access, mkdir, writeFile } from "fs/promises";
+import { access, mkdir, readFile, writeFile } from "fs/promises";
 import { join, resolve } from "path";
 import { z } from "zod";
 import type { SessionStore } from "../state/store.js";
@@ -39,9 +39,9 @@ import { extractAtomicFacts } from "../memory/episode-store.js";
 
 export const researchPipelineInputSchema = z.object({
   sessionId: z.string().default("default"),
-  phase: z.enum(["init", "gather", "analyze", "verify", "finalize"]).describe(
-    "Pipeline phase. Call in order: init → gather (repeatable) → analyze → verify → finalize. " +
-    "Each phase auto-chains the appropriate layer tools internally. Analyze is blocked until gathered evidence clears the weak-evidence gate."
+  phase: z.enum(["init", "gather", "analyze", "verify", "finalize", "review"]).describe(
+    "Pipeline phase. Call in order: init → gather (repeatable) → review → analyze → verify → finalize. " +
+    "Each phase auto-chains the appropriate layer tools internally. Analyze is blocked until gathered evidence clears the weak-evidence gate and coverage ≥ 60%."
   ),
   content: z.string().describe(
     "Phase-specific content: " +
@@ -72,7 +72,10 @@ export const researchPipelineInputSchema = z.object({
   })).default([]).describe("Recent conversation messages for context_loop"),
   claim: z.string().optional().describe("Specific claim to fact-check (verify phase)"),
   metadata: z.record(z.unknown()).optional().describe(
-    "Optional metadata for memory storage and finalize/export controls. Supported conventions include sourceTools during gather, maxChunkChars during finalize, and exportChunkIndex during finalize chunk retrieval."
+    "Optional metadata for memory storage and finalize/export controls. Supported conventions: " +
+    "sourceTools during gather, maxChunkChars during finalize, exportChunkIndex during finalize chunk retrieval, " +
+    "outline (Array<{title, description}>) during gather to set the research outline, " +
+    "targetSection (number) during gather to expand/append depth to a specific outline section (multi-gather accumulation)."
   ),
 });
 
@@ -181,8 +184,8 @@ interface WrittenBundleSummary {
   files: string[];
 }
 
-// Evidence gate disabled — LLM decides when to move to analyze.
-const MIN_ANALYZE_EVIDENCE_SCORE = 0;
+// Evidence gate: block analyze when cumulative evidence is too weak.
+const MIN_ANALYZE_EVIDENCE_SCORE = 0.3;
 const DEFAULT_EXPORT_CHUNK_CHARS = 60_000;
 
 // Verify soft-pass: after N attempts, allow non-critical actions to pass
@@ -201,6 +204,51 @@ const MIN_GATHER_CONTENT_LINES = 0;
 const MAX_CHARS_BEFORE_SPLIT = 30_000;
 const SPLIT_MIN_SECTION_CHARS = 5_000;
 
+// Per-section quality gate thresholds — operate on the WRITTEN FILE, not raw input.
+// These are separate from MIN_GATHER_CONTENT_CHARS/LINES (which remain 0).
+const MIN_SECTION_CHARS = 25_000;
+const MIN_SECTION_LINES = 500;
+
+// Coverage: minimum fraction of outline sections that must be drafted before analyze
+const MIN_COVERAGE_PERCENT = 0.8;
+const MIN_COVERAGE_FOR_ANALYZE = 0.6;
+
+// Maximum times a section can be rejected before auto-accepting
+const MAX_SECTION_REJECTIONS = 6;
+
+interface OutlineSection {
+  sectionIndex: number;
+  title: string;
+  description: string;
+  targetChars: number;
+  status: "pending" | "drafted" | "reviewed" | "passed";
+  charCount: number;
+  lineCount: number;
+  fileName: string | null;
+  rejectionCount: number;
+}
+
+interface QualityGateResult {
+  passed: boolean;
+  reason: string;
+  charCount: number;
+  lineCount: number;
+}
+
+interface ReviewSectionResult {
+  sectionIndex: number;
+  title: string;
+  fileName: string;
+  charCount: number;
+  lineCount: number;
+  evidenceScore: number;
+  sectionCount: number;
+  hasCrossReferences: boolean;
+  hasData: boolean;
+  passed: boolean;
+  failures: string[];
+}
+
 const PIPELINE_STATE_KEYS = [
   "research_task",
   "pipeline_phase",
@@ -216,6 +264,9 @@ const PIPELINE_STATE_KEYS = [
   "pipeline_sandbox_problem",
   "pipeline_sandbox_analysis_summary",
   "pipeline_verify_attempt_count",
+  "pipeline_outline",
+  "pipeline_outline_source",
+  "pipeline_review_results",
 ] as const;
 
 const PIPELINE_TOOL_COVERAGE = {
@@ -387,129 +438,12 @@ function getEpisodesByType(
     });
 }
 
-/**
- * Enrich a single episode's content with extracted facts, knowledge graph
- * connections, and cross-batch entity references so that exported evidence
- * files contain substantially more detail than just rawContent.
- */
-function enrichEpisodeContent(
-  memory: UnifiedMemoryManager,
-  sessionId: string,
-  episode: Episode,
-  batchIndex: number
-): string {
-  const sections: string[] = [episode.rawContent];
-
-  // 1. Atomic facts — sentence-level declarations, associations, triples
-  const facts = extractAtomicFacts(episode.rawContent, episode.id);
-  const declarations = facts.filter((f) => f.type === "declaration");
-  const associations = facts.filter((f) => f.type === "association");
-  const triples = facts.filter((f) => f.type === "triple");
-
-  if (declarations.length > 0) {
-    sections.push(
-      `\n\n---\n\n## Extracted Declarations (${declarations.length})\n\n` +
-        declarations.map((f) => `- ${f.text}`).join("\n")
-    );
-  }
-  if (associations.length > 0) {
-    sections.push(
-      `\n\n### Key Associations (${associations.length})\n\n` +
-        associations.map((f) => `- ${f.text}`).join("\n")
-    );
-  }
-  if (triples.length > 0) {
-    sections.push(
-      `\n\n### Structured Triples (${triples.length})\n\n` +
-        triples.map((f) => `- ${f.text}`).join("\n")
-    );
-  }
-
-  // 2. Knowledge graph edges associated with this episode
-  try {
-    const allEdges = memory.graph.getEdges(sessionId);
-    const episodeEdges = allEdges.filter((e) => e.episodeIds.includes(episode.id));
-    if (episodeEdges.length > 0) {
-      const allNodes = memory.graph.getNodes(sessionId);
-      const nodeMap = new Map(allNodes.map((n) => [n.id, n]));
-
-      sections.push(
-        `\n\n## Knowledge Graph Connections (${episodeEdges.length} edges)\n\n` +
-          episodeEdges
-            .sort((a, b) => b.weight - a.weight)
-            .slice(0, 60)
-            .map((e) => {
-              const src = nodeMap.get(e.source);
-              const tgt = nodeMap.get(e.target);
-              return `- ${src?.label ?? e.source} --[${e.relation}]--> ${tgt?.label ?? e.target} (weight: ${e.weight.toFixed(2)})`;
-            })
-            .join("\n")
-      );
-
-      // Top entities by PageRank linked to this episode
-      const entityIds = new Set(episodeEdges.flatMap((e) => [e.source, e.target]));
-      const episodeEntities = allNodes
-        .filter((n) => entityIds.has(n.id))
-        .sort((a, b) => b.pageRank - a.pageRank);
-      if (episodeEntities.length > 0) {
-        sections.push(
-          `\n\n### Key Entities (${episodeEntities.length})\n\n` +
-            episodeEntities
-              .slice(0, 40)
-              .map(
-                (n) =>
-                  `- **${n.label}** (${n.type}, mentions: ${n.mentions}, pageRank: ${n.pageRank.toFixed(4)})`
-              )
-              .join("\n")
-        );
-      }
-
-      // Cross-batch references: edges that connect this episode to other episodes
-      const otherBatchEdges = episodeEdges.filter(
-        (e) => e.episodeIds.some((id) => id !== episode.id)
-      );
-      if (otherBatchEdges.length > 0) {
-        const crossBatchNodes = new Set<string>();
-        for (const e of otherBatchEdges) {
-          const src = nodeMap.get(e.source);
-          const tgt = nodeMap.get(e.target);
-          if (src) crossBatchNodes.add(src.label);
-          if (tgt) crossBatchNodes.add(tgt.label);
-        }
-        sections.push(
-          `\n\n### Cross-Batch References\n\nConcepts shared with other batches: ${[...crossBatchNodes].slice(0, 30).join(", ")}`
-        );
-      }
-    }
-  } catch {
-    // Graph enrichment is best-effort; don't block export on graph errors
-  }
-
-  // 3. Semantic memory abstractions that reference this episode
-  try {
-    const semanticUnits = memory.semantic.getAll(sessionId);
-    const relatedUnits = semanticUnits.filter((u) =>
-      u.supportingEpisodeIds.includes(episode.id)
-    );
-    if (relatedUnits.length > 0) {
-      sections.push(
-        `\n\n## Semantic Abstractions (${relatedUnits.length})\n\n` +
-          relatedUnits
-            .sort((a, b) => b.confidence - a.confidence)
-            .slice(0, 20)
-            .map(
-              (u) =>
-                `- ${u.abstraction} (confidence: ${u.confidence.toFixed(2)}, level: ${u.consolidationLevel})`
-            )
-            .join("\n")
-      );
-    }
-  } catch {
-    // Semantic enrichment is best-effort
-  }
-
-  return sections.join("");
-}
+// enrichEpisodeContent() — REMOVED (Round 14).
+// This function was dead code (never called) that output internal NLP metadata
+// (knowledge graph edges, PageRank scores, extracted triples, etc.) into user-facing
+// content. All references have been confirmed absent. The memory system's recall()
+// now returns natural language instead of metadata, and all output paths use
+// episode.rawContent directly.
 
 function splitChunkContent(content: string, maxChars: number): string[] {
   if (content.length <= maxChars) {
@@ -1093,6 +1027,15 @@ function validatePipelineTransition(
     );
   }
 
+  if (phase === "review" && gatherCount < 1) {
+    return buildBlockedPhaseResult(
+      phase,
+      "gather",
+      "Review requires at least one gather batch with files on disk. Call research_pipeline phase='gather' first.",
+      { currentPhase, gatherCount, verifyPassed, evidenceScore, lastGatherQuality }
+    );
+  }
+
   if (phase === "analyze" && gatherCount < 1) {
     return buildBlockedPhaseResult(
       phase,
@@ -1102,8 +1045,15 @@ function validatePipelineTransition(
     );
   }
 
-  // Evidence gate removed — LLM decides when to analyze.
-  // Previously blocked analyze when evidenceScore < MIN_ANALYZE_EVIDENCE_SCORE.
+  // Evidence gate: block analyze when cumulative evidence is still weak
+  if (phase === "analyze" && evidenceScore < MIN_ANALYZE_EVIDENCE_SCORE) {
+    return buildBlockedPhaseResult(
+      phase,
+      "gather",
+      `Cumulative evidence is still weak (score ${evidenceScore}, need ≥${MIN_ANALYZE_EVIDENCE_SCORE}). Gather more sourced findings before analysis.`,
+      { currentPhase, gatherCount, verifyPassed, evidenceScore, lastGatherQuality }
+    );
+  }
 
   if (phase === "verify" && currentPhase !== "analyze" && currentPhase !== "verify") {
     return buildBlockedPhaseResult(
@@ -1166,6 +1116,9 @@ export async function handleResearchPipeline(
       break;
     case "gather":
       result = await runGatherPhase(store, catalog, memory, sessionId, content, messages, metadata, resolvedOutputDir, safeBase);
+      break;
+    case "review":
+      result = await runReviewPhase(store, memory, sessionId, resolvedOutputDir);
       break;
     case "analyze":
       result = await runAnalyzePhase(store, catalog, memory, siloManager, sessionId, content, messages, resolvedOutputDir, safeBase);
@@ -1399,12 +1352,15 @@ function runInitPhase(
   store.setState(sessionId, "pipeline_last_gather_quality", "none", "pipeline");
   store.setState(sessionId, "pipeline_verify_passed", false, "pipeline");
   store.setState(sessionId, "pipeline_last_verify_action", "not_run", "pipeline");
+  // Initialize empty outline — will be populated when gather receives metadata.outline or auto-generated
+  store.setState(sessionId, "pipeline_outline", JSON.stringify([]), "pipeline");
   layersExecuted.push("STATE:set_state");
   results.pipelineReset = {
     gatherCount: 0,
     evidenceScoreTotal: 0,
     verifyPassed: false,
     clearedPipelineKeys,
+    outlineInitialized: true,
   };
 
   // 6. discover_tools — show what tools are available
@@ -1420,6 +1376,11 @@ function runInitPhase(
     directive: `Initialization complete. Context health: ${loopResult.directive.contextHealth ?? "N/A"}. ` +
       `Action: ${loopResult.action}. ` +
       `Prior memories: ${recallResult.items.length}. ` +
+      `RESEARCH OUTLINE: Generate an outline of 12+ sections for this research topic — like a 12-module codebase architecture. ` +
+      `Pass it back as the next gather call with metadata.outline = [{title: "...", description: "..."}]. ` +
+      `Each section targets 500+ lines / 25K+ chars — a single gather produces ~150-200 lines, so plan 3-4 gathers per section using metadata.targetSection=N to accumulate depth. ` +
+      `The outline tracks per-section coverage, quality gates, and review results. ` +
+      `If you skip the outline, the pipeline will auto-generate one from the topic. ` +
       `CRITICAL WORKFLOW — Interleave search and gather strictly: ` +
       `(1) Do ONE web search on a specific topic. ` +
       `(2) IMMEDIATELY call gather with deeply written research content based on that search. ` +
@@ -1427,7 +1388,7 @@ function runInitPhase(
       `(4) Repeat steps 1-3 for the next topic. ` +
       `Do NOT batch multiple searches before calling gather — context compaction will lose the earlier search results. ` +
       `You are a research AUTHOR: for each gather, write a comprehensive section (not a raw paste) with facts, data, analysis, relationships, and expert commentary. ` +
-      `After all topics gathered, call analyze → verify → finalize (these operate on the accumulated files).`,
+      `After all topics gathered, call review to check quality, then analyze → verify → finalize (these operate on the accumulated files).`,
   };
 }
 
@@ -1454,6 +1415,100 @@ async function runGatherPhase(
   const batchLabel = extractBatchLabel(findings, gatherCount);
   const sourceTools = normalizeStringArray(metadata?.sourceTools);
 
+  // ── Outline handling ──────────────────────────────────────────────
+  // If metadata.outline is provided, store it as the pipeline outline
+  let outline: OutlineSection[] = JSON.parse(
+    readStateValue<string>(store, sessionId, "pipeline_outline") ?? "[]"
+  );
+
+  if (metadata?.outline && Array.isArray(metadata.outline) && metadata.outline.length > 0) {
+    // LLM provided an outline — convert to OutlineSection[]
+    outline = (metadata.outline as Array<{ title?: string; description?: string }>).map(
+      (item, idx) => ({
+        sectionIndex: idx + 1,
+        title: typeof item.title === "string" ? item.title : `Section ${idx + 1}`,
+        description: typeof item.description === "string" ? item.description : "",
+        targetChars: MIN_SECTION_CHARS,
+        status: "pending" as const,
+        charCount: 0,
+        lineCount: 0,
+        fileName: null,
+        rejectionCount: 0,
+      })
+    );
+    store.setState(sessionId, "pipeline_outline", JSON.stringify(outline), "pipeline");
+    store.setState(sessionId, "pipeline_outline_source", "provided", "pipeline");
+    results.outlineSet = { sections: outline.length, source: "provided" };
+  }
+
+  // Auto-generate outline if still empty after first gather
+  if (outline.length === 0 && gatherCount === 1) {
+    const taskDescription = readStateValue<string>(store, sessionId, "research_task") ?? findings.slice(0, 200);
+    const defaultSections = [
+      "Overview and Introduction",
+      "Core Concepts and Foundations",
+      "Historical Context and Evolution",
+      "Detailed Analysis and Deep Dives",
+      "Key Methodologies and Approaches",
+      "Data, Evidence, and Case Studies",
+      "Comparative Analysis and Benchmarks",
+      "Applications and Practical Implications",
+      "Expert Perspectives and Commentary",
+      "Challenges, Risks, and Limitations",
+      "Risk Assessment and Mitigation Strategies",
+      "Future Directions and Emerging Trends",
+    ];
+    outline = defaultSections.map((title, idx) => ({
+      sectionIndex: idx + 1,
+      title,
+      description: `${title} for: ${taskDescription.slice(0, 100)}`,
+      targetChars: MIN_SECTION_CHARS,
+      status: "pending" as const,
+      charCount: 0,
+      lineCount: 0,
+      fileName: null,
+      rejectionCount: 0,
+    }));
+    store.setState(sessionId, "pipeline_outline", JSON.stringify(outline), "pipeline");
+    store.setState(sessionId, "pipeline_outline_source", "auto-generated", "pipeline");
+    results.outlineSet = { sections: outline.length, source: "auto-generated" };
+  }
+
+  // ── targetSection handling ────────────────────────────────────────
+  let targetSection = typeof metadata?.targetSection === "number" ? metadata.targetSection : undefined;
+
+  // ── Hard block: force re-gather on failed section ─────────────────
+  // If a prior section failed quality gate, the LLM MUST fix it before
+  // moving on.  This prevents the LLM from ignoring gate failures.
+  const blockedSectionIdx = readStateValue<number>(store, sessionId, "pipeline_gate_blocked_section");
+  if (blockedSectionIdx !== undefined && blockedSectionIdx !== null) {
+    const blockedEntry = outline.find(s => s.sectionIndex === blockedSectionIdx);
+    if (blockedEntry && blockedEntry.status === "pending") {
+      if (targetSection !== undefined && targetSection !== blockedSectionIdx) {
+        // LLM is trying to skip to a different section — block it
+        return buildBlockedPhaseResult(
+          "gather",
+          "gather",
+          `⛔ BLOCKED: Section ${blockedSectionIdx} ("${blockedEntry.title}") failed quality gate ` +
+            `(${blockedEntry.charCount}/${MIN_SECTION_CHARS} chars, ${blockedEntry.lineCount}/${MIN_SECTION_LINES} lines). ` +
+            `You MUST call gather with metadata.targetSection=${blockedSectionIdx} to APPEND more research to this section. ` +
+            `Do a web search about "${blockedEntry.title}", write 3000+ chars of in-depth content, then call gather. ` +
+            `Rejection ${blockedEntry.rejectionCount}/${MAX_SECTION_REJECTIONS} — section will auto-accept after ${MAX_SECTION_REJECTIONS} rejections.`,
+          {
+            blockedSection: blockedSectionIdx,
+            blockedTitle: blockedEntry.title,
+            rejectionCount: blockedEntry.rejectionCount,
+            maxRejections: MAX_SECTION_REJECTIONS,
+          }
+        );
+      }
+      if (targetSection === undefined) {
+        // LLM didn't specify targetSection — auto-redirect to the blocked section
+        targetSection = blockedSectionIdx;
+      }
+    }
+  }
+
   // 1. memory_store — persist findings across all 9 memory tiers
   const storeResult = memory.store(sessionId, "assistant", findings, {
     ...metadata,
@@ -1465,36 +1520,19 @@ async function runGatherPhase(
     sourceTools,
   });
   layersExecuted.push("MEMORY:memory_store");
-  results.memoryStore = {
-    episodeId: storeResult.episodeId,
-    sentenceCount: storeResult.sentenceCount,
-    factsExtracted: storeResult.factsExtracted,
-    graphNodesAdded: storeResult.graphNodesAdded,
-    callbacksRegistered: storeResult.callbacksRegistered,
-  };
+  // Only confirm storage — no internal metrics (sentenceCount, factsExtracted, graphNodes, PageRank etc.)
+  // because the LLM echoes them into user-facing finalSummary and output files.
+  results.stored = true;
+  results.storedChars = findings.length;
 
-  // 1b. Return a brief confirmation of stored content to the LLM.
-  //     Previously returned enrichEpisodeContent() with graph edges, PageRank, triples —
-  //     but the LLM echoed that noise into the finalSummary, polluting user-facing files.
-  //     Now returns only a content preview so the LLM knows what was stored.
-  results.storedContentPreview = findings.slice(0, 1500) + (findings.length > 1500 ? "\n\n[...truncated — full content stored in memory and written to disk]" : "");
-  results.storedContentLength = findings.length;
-
-  // 2. memory_graph — query knowledge graph for connections
-  const graphResults = memory.graph.associativeRecall(sessionId, findings.slice(0, 1500), 2, 10);
+  // 2. memory_graph — query for internal indexing (results NOT exposed to LLM)
+  memory.graph.associativeRecall(sessionId, findings.slice(0, 1500), 2, 10);
   layersExecuted.push("MEMORY:memory_graph");
-  results.knowledgeGraph = {
-    nodesFound: graphResults.length,
-    topConnections: graphResults.slice(0, 5).map(r => ({
-      label: r.node.label,
-      type: r.node.type,
-      pageRank: Number(r.node.pageRank.toFixed(4)),
-      distance: r.distance,
-    })),
-  };
+
+  results.quality = researchQuality.quality;
   results.researchQuality = {
-    ...researchQuality,
-    gatherCount,
+    evidenceScore: researchQuality.evidenceScore,
+    quality: researchQuality.quality,
     cumulativeEvidenceScore,
   };
   results.batch = {
@@ -1512,11 +1550,7 @@ async function runGatherPhase(
     lookbackTurns: 5,
   });
   layersExecuted.push("ORCHESTRATOR:context_loop", "HEALTH:all_9_stages", "TRUTH:all_7_stages");
-  results.healthCheck = {
-    action: loopResult.action,
-    contextHealth: loopResult.directive.contextHealth,
-    instruction: loopResult.directive.instruction,
-  };
+  // Health check results used internally for pipeline flow control, not exposed to LLM
 
   // 4. set_state
   const batchManifest = [
@@ -1559,13 +1593,78 @@ async function runGatherPhase(
   }
 
   // 5. Autonomous file writing — write 1 cohesive file per gather call.
+  //    Supports targetSection for overwriting a specific outline section.
   //    Previous approach split by ## headings, producing 10+ tiny files (~500-2000
   //    bytes) per gather.  The correct model: 1 gather = 1 output file, with all
   //    headings preserved as internal structure.  Only split when content is
   //    genuinely large (>30K chars) to avoid >500-line monoliths.
   const fileWriteResults: PhaseFileWriteResult[] = [];
   if (outputDir) {
-    if (findings.length > MAX_CHARS_BEFORE_SPLIT) {
+    if (targetSection !== undefined) {
+      // ── targetSection: overwrite/replace a specific section's file ──
+      const outlineEntry = outline.find(s => s.sectionIndex === targetSection);
+      if (outlineEntry && outlineEntry.fileName) {
+        // Overwrite the existing file if new content is larger, otherwise append
+        const existingFilePath = join(resolve(outputDir), outlineEntry.fileName);
+        let existingContent = "";
+        try {
+          existingContent = await readFile(existingFilePath, { encoding: "utf8" });
+        } catch {
+          // File doesn't exist yet — that's fine, we'll create it
+        }
+
+        const topicSlug = slugify(outlineEntry.title) || `section-${targetSection}`;
+        const fileName = outlineEntry.fileName;
+        let fileContent: string;
+
+        // Always accumulate — append new research to existing content.
+        // Multi-gather depth: each gather adds ~150 lines, 3-4 gathers build to 500+ lines.
+        if (existingContent.length === 0) {
+          fileContent = [
+            `# ${outlineEntry.title}`,
+            "",
+            `> Research batch ${gatherCount}, section ${targetSection}`,
+            sourceTools.length > 0 ? `> Source: ${sourceTools.join(", ")}` : undefined,
+            "",
+            "---",
+            "",
+            findings.trim(),
+          ].filter((line) => line !== undefined).join("\n");
+        } else {
+          fileContent = existingContent + "\n\n---\n\n" +
+            `## Additional Research (batch ${gatherCount})\n\n` +
+            findings.trim();
+        }
+
+        const writeResult = await writePhaseFile(outputDir, fileName, fileContent);
+        fileWriteResults.push(writeResult);
+      } else {
+        // Target section exists in outline but no file yet — create one
+        const entry = outlineEntry ?? outline[0];
+        const sectionTitle = entry?.title ?? `Section ${targetSection}`;
+        const topicSlug = slugify(sectionTitle) || `section-${targetSection}`;
+        const fileName = `${baseFileName}.batch-${padNumber(gatherCount)}.${topicSlug}.md`;
+
+        const fileContent = [
+          `# ${sectionTitle}`,
+          "",
+          `> Research batch ${gatherCount}, section ${targetSection}`,
+          sourceTools.length > 0 ? `> Source: ${sourceTools.join(", ")}` : undefined,
+          "",
+          "---",
+          "",
+          findings.trim(),
+        ].filter((line) => line !== undefined).join("\n");
+
+        const writeResult = await writePhaseFile(outputDir, fileName, fileContent);
+        fileWriteResults.push(writeResult);
+
+        // Update outline entry with fileName
+        if (outlineEntry) {
+          outlineEntry.fileName = fileName;
+        }
+      }
+    } else if (findings.length > MAX_CHARS_BEFORE_SPLIT) {
       // Large content: split by headings with aggressive merging (5K min per section)
       const topicSections = splitGatherByHeadings(findings, SPLIT_MIN_SECTION_CHARS);
 
@@ -1615,27 +1714,154 @@ async function runGatherPhase(
     results.autonomousFileWrites = fileWriteResults;
   }
 
+  // ── Quality Gate — per-section check on the WRITTEN FILE ──────────
+  // When quality gate FAILS, this block short-circuits with an early return.
+  // Only the PASS / auto-accept paths reach the normal directive below.
+  if (fileWriteResults.length > 0) {
+    const primaryFile = fileWriteResults[0];
+    const fileChars = primaryFile.charCount;
+    const fileLines = primaryFile.lineCount;
+
+    // Identify which outline section this gather corresponds to
+    const matchingOutlineIdx = targetSection !== undefined
+      ? outline.findIndex(s => s.sectionIndex === targetSection)
+      : outline.findIndex(s => s.status === "pending");
+    const matchedOutlineEntry = matchingOutlineIdx >= 0 ? outline[matchingOutlineIdx] : undefined;
+    const maxRejections = matchedOutlineEntry ? matchedOutlineEntry.rejectionCount >= MAX_SECTION_REJECTIONS : false;
+
+    // Always record fileName in outline — even if quality gate failed —
+    // so that subsequent targetSection re-gathers can find and append to the file.
+    if (matchingOutlineIdx >= 0) {
+      outline[matchingOutlineIdx].charCount = fileChars;
+      outline[matchingOutlineIdx].lineCount = fileLines;
+      outline[matchingOutlineIdx].fileName = primaryFile.fileName;
+    }
+
+    if (fileChars < MIN_SECTION_CHARS || fileLines < MIN_SECTION_LINES) {
+      if (maxRejections) {
+        // Auto-accept after max rejections — clear block
+        results.qualityGate = {
+          passed: true,
+          reason: `Auto-accepted after ${MAX_SECTION_REJECTIONS} rejections (${fileChars}/${MIN_SECTION_CHARS} chars, ${fileLines}/${MIN_SECTION_LINES} lines).`,
+          charCount: fileChars,
+          lineCount: fileLines,
+        };
+        if (matchingOutlineIdx >= 0) {
+          outline[matchingOutlineIdx].status = "drafted";
+        }
+        // Clear the gate block — section is accepted
+        store.setState(sessionId, "pipeline_gate_blocked_section", null, "pipeline");
+      } else {
+        const failedSectionIdx = targetSection ?? (matchedOutlineEntry ? matchedOutlineEntry.sectionIndex : undefined);
+        const failedTitle = matchedOutlineEntry?.title ?? `Section ${failedSectionIdx}`;
+        const rejCount = (matchedOutlineEntry?.rejectionCount ?? 0) + 1;
+        results.qualityGate = {
+          passed: false,
+          reason: `Section too thin: ${fileChars}/${MIN_SECTION_CHARS} chars, ${fileLines}/${MIN_SECTION_LINES} lines. EXPAND with more detail, data, examples, and analysis.`,
+          charCount: fileChars,
+          lineCount: fileLines,
+        };
+        // Track rejection on outline entry
+        if (matchedOutlineEntry) {
+          matchedOutlineEntry.rejectionCount += 1;
+        }
+
+        // ── HARD BLOCK: Set blocked section in state ──
+        // This prevents the LLM from moving to another section.
+        if (failedSectionIdx !== undefined) {
+          store.setState(sessionId, "pipeline_gate_blocked_section", failedSectionIdx, "pipeline");
+        }
+
+        // Persist updated outline before returning
+        store.setState(sessionId, "pipeline_outline", JSON.stringify(outline), "pipeline");
+
+        // ── SHORT-CIRCUIT RETURN ──
+        // When quality gate fails, return ONLY the re-gather directive.
+        // No coverage info, no "next section" suggestion, no "continue searching."
+        // This forces the LLM to stay on this section.
+        const charsNeeded = MIN_SECTION_CHARS - fileChars;
+        const linesNeeded = MIN_SECTION_LINES - fileLines;
+        const gathersEstimate = Math.max(1, Math.ceil(linesNeeded / 150));
+
+        return {
+          phase: "gather",
+          layersExecuted,
+          results,
+          nextPhase: "gather",
+          directive:
+            `⛔ QUALITY GATE FAILED for section ${failedSectionIdx} ("${failedTitle}"). ` +
+            `File has ${fileChars} chars (need ${MIN_SECTION_CHARS}) and ${fileLines} lines (need ${MIN_SECTION_LINES}). ` +
+            `Still need ~${charsNeeded} more chars and ~${linesNeeded} more lines. ` +
+            `DO NOT MOVE TO ANOTHER SECTION. You are BLOCKED until this section passes. ` +
+            `Step 1: Do a web search for MORE information about "${failedTitle}". ` +
+            `Step 2: Write 3000+ chars of deeply detailed content (analysis, data, examples, expert views, case studies). ` +
+            `Step 3: Call gather with metadata.targetSection=${failedSectionIdx} — this APPENDS to the existing file. ` +
+            `Estimated ${gathersEstimate} more gather calls needed for this section. ` +
+            `Rejection ${rejCount}/${MAX_SECTION_REJECTIONS} — after ${MAX_SECTION_REJECTIONS} failed attempts, section auto-accepts.`,
+        };
+      }
+    } else {
+      results.qualityGate = {
+        passed: true,
+        reason: `Section meets quality gate: ${fileChars} chars, ${fileLines} lines.`,
+        charCount: fileChars,
+        lineCount: fileLines,
+      };
+      if (matchingOutlineIdx >= 0) {
+        outline[matchingOutlineIdx].status = "drafted";
+      }
+      // Clear the gate block — section passed
+      store.setState(sessionId, "pipeline_gate_blocked_section", null, "pipeline");
+    }
+    // Persist updated outline
+    store.setState(sessionId, "pipeline_outline", JSON.stringify(outline), "pipeline");
+  }
+
+  // ── Coverage Tracker ──────────────────────────────────────────────
+  const draftedSections = outline.filter(s => s.status !== "pending").length;
+  const totalSections = outline.length;
+  const coveragePercent = totalSections > 0 ? roundTo(draftedSections / totalSections, 2) : 0;
+  const remainingSections = outline.filter(s => s.status === "pending").map(s => s.title);
+
+  const coverageReport = {
+    drafted: draftedSections,
+    total: totalSections,
+    percent: coveragePercent,
+    remaining: remainingSections,
+  };
+  results.coverageReport = coverageReport;
+
+  let coverageDirective = "";
+  if (totalSections > 0) {
+    coverageDirective = ` Coverage: ${draftedSections}/${totalSections} sections drafted (${Math.round(coveragePercent * 100)}%).`;
+    if (remainingSections.length > 0) {
+      coverageDirective += ` Remaining: ${remainingSections.slice(0, 5).join(", ")}${remainingSections.length > 5 ? "..." : ""}.`;
+      // Suggest which section to research next
+      const nextPendingIdx = outline.findIndex(s => s.status === "pending");
+      if (nextPendingIdx >= 0) {
+        coverageDirective += ` Research section ${outline[nextPendingIdx].sectionIndex} ("${outline[nextPendingIdx].title}") next.`;
+      }
+    }
+    if (coveragePercent >= MIN_COVERAGE_PERCENT) {
+      coverageDirective += ` Coverage threshold met (${Math.round(MIN_COVERAGE_PERCENT * 100)}%). You may proceed to review or continue drafting remaining sections.`;
+    }
+  }
+
   const totalFilesWritten = fileWriteResults.length;
-  const totalLinesWritten = fileWriteResults.reduce((sum, f) => sum + f.lineCount, 0);
-  const totalCharsWritten = fileWriteResults.reduce((sum, f) => sum + f.charCount, 0);
 
   return {
     phase: "gather",
     layersExecuted,
     results,
     nextPhase: researchQuality.quality === "weak" ? "gather" : "gather or analyze",
-    directive: `Findings stored: ${storeResult.sentenceCount} sentences, ${storeResult.factsExtracted} facts, ` +
-      `${storeResult.graphNodesAdded} graph nodes. ` +
-      `Evidence quality: ${researchQuality.quality} (score ${researchQuality.evidenceScore.toFixed(2)}, urls=${researchQuality.urls}, citations=${researchQuality.citationSignals}, numericClaims=${researchQuality.numericClaims}). ` +
-      `Health: ${loopResult.directive.contextHealth ?? "N/A"}. ` +
-      `${qualityDirective} ` +
-      `${loopResult.action === "proceed" ? "Context health supports continuing." : `Warning: ${loopResult.action} — ${loopResult.directive.instruction}`}` +
+    directive: `Batch ${gatherCount} "${batchLabel}" stored (${findings.length} chars, quality: ${researchQuality.quality}). ` +
+      `${qualityDirective}` +
       contentWarning +
+      coverageDirective +
       (totalFilesWritten > 0
-        ? ` FILE SAVED: ${totalFilesWritten} file(s) to disk (${totalLinesWritten} lines, ${totalCharsWritten} chars). ` +
-          `Files: ${fileWriteResults.map(f => f.fileName).join(", ")}. ` +
+        ? ` FILE SAVED: ${fileWriteResults.map(f => f.fileName).join(", ")}. ` +
           `NEXT: Do your next web search NOW, then IMMEDIATELY call gather again with deeply written content. ` +
-          `When all topics are covered, proceed to analyze.`
+          `When all topics are covered, call review to check quality, then proceed to analyze.`
         : ` TIP: Pass outputDir to research_pipeline to enable autonomous file writing per batch.`),
   };
 }
@@ -1655,6 +1881,26 @@ async function runAnalyzePhase(
   const layersExecuted: string[] = [];
   const results: Record<string, unknown> = {};
 
+  // Coverage gate: block analyze until at least 60% of outline sections are drafted
+  // Only enforced for user-provided outlines — auto-generated outlines fall back to evidence score gate
+  const outlineJson = readStateValue<string>(store, sessionId, "pipeline_outline") ?? "[]";
+  const outlineSections: OutlineSection[] = JSON.parse(outlineJson);
+  const outlineSource = readStateValue<string>(store, sessionId, "pipeline_outline_source") ?? "auto-generated";
+  if (outlineSections.length > 0 && outlineSource === "provided") {
+    const draftedCount = outlineSections.filter(s => s.status !== "pending").length;
+    const analysisCoverage = draftedCount / outlineSections.length;
+    if (analysisCoverage < MIN_COVERAGE_FOR_ANALYZE) {
+      const remaining = outlineSections.filter(s => s.status === "pending").map(s => s.title);
+      return buildBlockedPhaseResult(
+        "analyze",
+        "gather",
+        `Coverage too low for analysis: ${draftedCount}/${outlineSections.length} sections drafted (${Math.round(analysisCoverage * 100)}%, need ≥${Math.round(MIN_COVERAGE_FOR_ANALYZE * 100)}%). ` +
+          `Draft more sections before analyzing. Remaining: ${remaining.slice(0, 5).join(", ")}${remaining.length > 5 ? "..." : ""}.`,
+        { coverage: analysisCoverage, drafted: draftedCount, total: outlineSections.length, remaining }
+      );
+    }
+  }
+
   // 0. quarantine_context — isolate exploratory analysis state before promoting distilled results
   const analysisSilo = siloManager.createSilo(
     sessionId,
@@ -1671,21 +1917,15 @@ async function runAnalyzePhase(
     createGroundTruthEntry(problem, "research_pipeline")
   );
   layersExecuted.push("SANDBOX:quarantine_context");
-  results.sandbox = sandboxResult;
+  // sandbox details are internal — not exposed to LLM output
 
   // 1. memory_recall — gather all relevant stored knowledge
   const recalled = memory.recall(sessionId, problem, 12);
   layersExecuted.push("MEMORY:memory_recall");
   const contextFromMemory = recalled.items.map(r => r.content).join("\n\n");
   const knownFacts = recalled.items.slice(0, 8).map(r => r.content.slice(0, 1200));
-  results.recalledMemories = {
-    count: recalled.items.length,
-    totalCandidates: recalled.totalCandidates,
-    gate: recalled.gateDecision.fusionStrategy,
-    injectedCharacters: contextFromMemory.length,
-  };
-  // Return full recalled context so the LLM can use it for writing detailed analysis files
-  results.recalledContext = contextFromMemory;
+  results.recalledMemoryCount = recalled.items.length;
+  results.recalledMemories = { count: recalled.items.length };
 
   // 2. InftyThink — iterative bounded-segment reasoning
   const enrichedProblem = contextFromMemory
@@ -1698,15 +1938,7 @@ async function runAnalyzePhase(
     maxSegmentTokens: 1200,
   });
   layersExecuted.push("REASONING:inftythink_reason");
-  results.inftythink = {
-    segments: inftyResult.totalSegments,
-    converged: inftyResult.converged,
-    convergenceReason: inftyResult.convergenceReason,
-    depthAchieved: inftyResult.depthAchieved,
-    totalTokens: inftyResult.totalTokens,
-    compression: Number(inftyResult.overallCompression.toFixed(3)),
-    finalAnswer: inftyResult.finalAnswer,
-  };
+  results.inftythink = { finalAnswer: inftyResult.finalAnswer };
 
   // 3. Coconut — multi-perspective continuous thought
   const coconutResult = runCoconut({
@@ -1716,14 +1948,7 @@ async function runAnalyzePhase(
     enableBreadthExploration: true,
   });
   layersExecuted.push("REASONING:coconut_reason");
-  results.coconut = {
-    totalSteps: coconutResult.totalSteps,
-    latentOperations: coconutResult.latentOperations,
-    compressionFactor: Number(coconutResult.compressionFactor.toFixed(2)),
-    planningScore: Number(coconutResult.planningScore.toFixed(3)),
-    usedBreadth: coconutResult.usedBreadthExploration,
-    finalAnswer: coconutResult.finalAnswer,
-  };
+  results.coconut = { finalAnswer: coconutResult.finalAnswer };
 
   // 4. KAG-Thinker — structured decomposition and dependency-grounded analysis
   const kagResult = runKAGThinker({
@@ -1733,15 +1958,7 @@ async function runAnalyzePhase(
     maxSteps: 40,
   });
   layersExecuted.push("REASONING:kagthinker_solve");
-  results.kagthinker = {
-    totalSubProblems: kagResult.totalSubProblems,
-    resolvedCount: kagResult.resolvedCount,
-    failedCount: kagResult.failedCount,
-    maxDepth: kagResult.maxDepth,
-    interactiveSteps: kagResult.interactiveSteps,
-    stabilityScore: Number(kagResult.stabilityScore.toFixed(3)),
-    finalAnswer: kagResult.finalAnswer,
-  };
+  results.kagthinker = { finalAnswer: kagResult.finalAnswer };
 
   // 5. Mind Evolution — evolutionary search over synthesized candidate answers
   const seedResponses = Array.from(new Set([
@@ -1763,14 +1980,7 @@ async function runAnalyzePhase(
     seedResponses: seedResponses.slice(0, 4),
   });
   layersExecuted.push("REASONING:mindevolution_solve");
-  results.mindevolution = {
-    generations: mindEvolutionResult.totalGenerations,
-    converged: mindEvolutionResult.converged,
-    diversityScore: Number(mindEvolutionResult.diversityScore.toFixed(3)),
-    totalEvaluated: mindEvolutionResult.totalEvaluated,
-    bestFitness: Number(mindEvolutionResult.bestCandidate.fitness.toFixed(3)),
-    finalAnswer: mindEvolutionResult.finalAnswer,
-  };
+  results.mindevolution = { finalAnswer: mindEvolutionResult.finalAnswer };
 
   // 6. ExtraCoT — compress the combined reasoning
   const combinedSteps = [
@@ -1786,14 +1996,7 @@ async function runAnalyzePhase(
     targetCompression: 0.27,
   });
   layersExecuted.push("REASONING:extracot_compress");
-  results.extracot = {
-    originalTokens: extracotResult.totalOriginalTokens,
-    compressedTokens: extracotResult.totalCompressedTokens,
-    compressionRatio: Number(extracotResult.overallCompressionRatio.toFixed(3)),
-    avgFidelity: Number(extracotResult.avgSemanticFidelity.toFixed(3)),
-    stepsWithinBudget: extracotResult.stepsWithinBudget,
-    finalAnswer: extracotResult.finalAnswer,
-  };
+  results.extracot = { finalAnswer: extracotResult.finalAnswer };
 
   analysisSilo.state.set(
     "pipeline_sandbox_analysis_summary",
@@ -1813,17 +2016,11 @@ async function runAnalyzePhase(
     "pipeline_sandbox_analysis_summary",
   ]);
   layersExecuted.push("SANDBOX:merge_quarantine");
-  results.sandbox = {
-    ...sandboxResult,
-    promotedCount: mergedSandbox.promotedCount,
-    promotedKeys: mergedSandbox.promotedKeys,
-  };
+  // sandbox details are internal — not exposed to LLM output
 
   // 7. memory_store — persist analysis results (full, no truncation)
-  const analysisText = `[ANALYSIS] InftyThink(${inftyResult.totalSegments} segs, ${inftyResult.converged ? "converged" : "partial"}):\n${inftyResult.finalAnswer}\n\n` +
-    `Coconut(${coconutResult.totalSteps} steps, planning=${coconutResult.planningScore.toFixed(2)}):\n${coconutResult.finalAnswer}\n\n` +
-    `KAGThinker(subproblems=${kagResult.totalSubProblems}, stability=${kagResult.stabilityScore.toFixed(2)}):\n${kagResult.finalAnswer}\n\n` +
-    `MindEvolution(generations=${mindEvolutionResult.totalGenerations}, bestFitness=${mindEvolutionResult.bestCandidate.fitness.toFixed(2)}):\n${mindEvolutionResult.finalAnswer}`;
+  //    Store content only — no engine names or stats so that later recall doesn't leak metadata
+  const analysisText = `${inftyResult.finalAnswer}\n\n${coconutResult.finalAnswer}\n\n${kagResult.finalAnswer}\n\n${mindEvolutionResult.finalAnswer}`;
   memory.store(sessionId, "assistant", analysisText, {
     type: "analysis",
     methods: ["inftythink", "coconut", "kagthinker", "mindevolution", "extracot"],
@@ -1840,10 +2037,7 @@ async function runAnalyzePhase(
     lookbackTurns: 10,
   });
   layersExecuted.push("ORCHESTRATOR:context_loop", "HEALTH:all_9_stages", "TRUTH:all_7_stages");
-  results.healthCheck = {
-    action: loopResult.action,
-    contextHealth: loopResult.directive.contextHealth,
-  };
+  // healthCheck used internally for state management — not exposed to LLM output
 
   store.setState(sessionId, "pipeline_phase", "analyze", "pipeline");
   store.setState(sessionId, "pipeline_verify_passed", false, "pipeline");
@@ -1919,12 +2113,7 @@ async function runAnalyzePhase(
     layersExecuted,
     results,
     nextPhase: "verify",
-    directive: `Analysis complete with 5 reasoning methods. ` +
-      `InftyThink: ${inftyResult.totalSegments} segments, ${inftyResult.converged ? "converged" : "partial"}. ` +
-      `Coconut: ${coconutResult.totalSteps} steps, planning=${coconutResult.planningScore.toFixed(2)}. ` +
-      `KAGThinker: ${kagResult.totalSubProblems} sub-problems, stability=${kagResult.stabilityScore.toFixed(2)}. ` +
-      `MindEvolution: ${mindEvolutionResult.totalGenerations} generations, bestFitness=${mindEvolutionResult.bestCandidate.fitness.toFixed(2)}. ` +
-      `ExtraCoT: ${extracotResult.overallCompressionRatio.toFixed(0)}x compression, fidelity=${extracotResult.avgSemanticFidelity.toFixed(2)}.` +
+    directive: `Analysis complete — 5 reasoning perspectives synthesized from ${recalled.items.length} memory items.` +
       filesSummary +
       ` Next: call research_pipeline phase='verify' with your draft output.`,
   };
@@ -1952,11 +2141,7 @@ function runVerifyPhase(
   // 1. memory_recall — cross-check draft against stored knowledge
   const crossCheck = memory.recall(sessionId, draftOutput.slice(0, 2000), 10);
   layersExecuted.push("MEMORY:memory_recall");
-  results.crossCheck = {
-    memoriesChecked: crossCheck.items.length,
-    totalCandidates: crossCheck.totalCandidates,
-    gate: crossCheck.gateDecision.fusionStrategy,
-  };
+  results.crossCheck = { memoriesChecked: crossCheck.items.length };
 
   // 2. context_loop — FULL verification
   //    Internally runs all 17 stages:
@@ -1989,35 +2174,16 @@ function runVerifyPhase(
     "TRUTH:ioe_correction", "TRUTH:self_critique"
   );
 
-  // Extract per-stage results for transparency
-  const stageResults: Record<string, { status: string; durationMs: number }> = {};
-  for (const stage of loopResult.stages) {
-    stageResults[stage.name] = {
-      status: stage.status,
-      durationMs: stage.durationMs,
-    };
-  }
+  // Per-stage verification details used internally — only summary exposed to LLM
   results.verification = {
     action: loopResult.action,
     contextHealth: loopResult.directive.contextHealth,
     instruction: loopResult.directive.instruction,
-    constraints: loopResult.directive.constraints,
-    stagesRun: stageResults,
-    completed: loopResult.stages.filter(s => s.status === "completed").length,
-    skipped: loopResult.stages.filter(s => s.status === "skipped").length,
-    errored: loopResult.stages.filter(s => s.status === "error").length,
   };
 
-  // 3. memory_inspect — check overall memory health
+  // memory health details used internally — not exposed to LLM output
   const memStatus = memory.getStatus(sessionId);
   layersExecuted.push("MEMORY:memory_inspect");
-  results.memoryHealth = {
-    tiers: memStatus.tiers,
-    graph: memStatus.graph,
-    compression: memStatus.compression,
-    curation: memStatus.curation,
-    lastIntegrity: memStatus.lastIntegrity,
-  };
 
   const verificationStoreResult = memory.store(
     sessionId,
@@ -2037,10 +2203,7 @@ function runVerifyPhase(
     }
   );
   layersExecuted.push("MEMORY:memory_store");
-  results.verificationStored = {
-    episodeId: verificationStoreResult.episodeId,
-    factsExtracted: verificationStoreResult.factsExtracted,
-  };
+  // verification storage details are internal
 
   // Determine pass status with soft-pass logic:
   // - Hard pass: action === "proceed"
@@ -2061,13 +2224,8 @@ function runVerifyPhase(
   layersExecuted.push("STATE:set_state");
 
   results.passDecision = {
-    hardPass,
-    softPassEligible,
     passed,
     attemptCount,
-    maxAttemptsForSoftPass: MAX_VERIFY_ATTEMPTS_SOFT,
-    contextHealth,
-    softPassHealthThreshold: VERIFY_SOFT_PASS_HEALTH_THRESHOLD,
     action: loopResult.action,
   };
 
@@ -2087,6 +2245,189 @@ function runVerifyPhase(
           (attemptCount >= MAX_VERIFY_ATTEMPTS_SOFT - 1
             ? `Next attempt will allow soft-pass for "${VERIFY_SOFT_PASS_ACTIONS.join('", "')}" actions if health >= ${VERIFY_SOFT_PASS_HEALTH_THRESHOLD}.`
             : `Fix the flagged issues and re-run verify. After ${MAX_VERIFY_ATTEMPTS_SOFT} attempts, soft-pass becomes available for non-critical actions.`),
+  };
+}
+
+// ─── Phase 4b: REVIEW ─────────────────────────────────────────────
+async function runReviewPhase(
+  store: SessionStore,
+  memory: UnifiedMemoryManager,
+  sessionId: string,
+  outputDir: string
+): Promise<PhaseResult> {
+  const layersExecuted: string[] = [];
+  const results: Record<string, unknown> = {};
+
+  // Read the outline and batch manifest from state
+  const outlineJson = readStateValue<string>(store, sessionId, "pipeline_outline") ?? "[]";
+  const outline: OutlineSection[] = JSON.parse(outlineJson);
+  const batchManifest = readStateValue<Array<Record<string, unknown>>>(store, sessionId, "pipeline_batch_manifest") ?? [];
+  layersExecuted.push("STATE:get_state");
+
+  // Collect all batch files from the manifest and outline
+  const filesToReview: Array<{ sectionIndex: number; title: string; fileName: string }> = [];
+
+  // First, collect files from the outline (preferred — has section info)
+  for (const section of outline) {
+    if (section.fileName) {
+      filesToReview.push({
+        sectionIndex: section.sectionIndex,
+        title: section.title,
+        fileName: section.fileName,
+      });
+    }
+  }
+
+  // If no outline files, collect from batch manifest
+  if (filesToReview.length === 0) {
+    const baseFileName = readStateValue<string>(store, sessionId, "pipeline_baseFileName") ?? "research";
+    for (const batch of batchManifest) {
+      const batchIndex = typeof batch.batchIndex === "number" ? batch.batchIndex : 0;
+      const batchLabel = typeof batch.batchLabel === "string" ? batch.batchLabel : `Batch ${batchIndex}`;
+      const topicSlug = slugify(batchLabel) || `batch-${batchIndex}`;
+      const fileName = `${baseFileName}.batch-${padNumber(batchIndex)}.${topicSlug}.md`;
+      filesToReview.push({
+        sectionIndex: batchIndex,
+        title: batchLabel,
+        fileName,
+      });
+    }
+  }
+
+  // Read all other outline section titles (for cross-reference checking)
+  const allSectionTitles = outline.map(s => s.title.toLowerCase());
+
+  const passed: ReviewSectionResult[] = [];
+  const failed: ReviewSectionResult[] = [];
+
+  for (const fileInfo of filesToReview) {
+    const filePath = join(resolve(outputDir), fileInfo.fileName);
+    let fileContent: string;
+    try {
+      fileContent = await readFile(filePath, { encoding: "utf8" });
+    } catch {
+      // File doesn't exist — mark as failed
+      failed.push({
+        sectionIndex: fileInfo.sectionIndex,
+        title: fileInfo.title,
+        fileName: fileInfo.fileName,
+        charCount: 0,
+        lineCount: 0,
+        evidenceScore: 0,
+        sectionCount: 0,
+        hasCrossReferences: false,
+        hasData: false,
+        passed: false,
+        failures: [`File not found: ${fileInfo.fileName}`],
+      });
+      continue;
+    }
+
+    const charCount = fileContent.length;
+    const lineCount = fileContent.split("\n").length;
+    const quality = analyzeResearchQuality(fileContent);
+    const sectionCount = countMatches(fileContent, /^##\s+/gm);
+
+    // Check for cross-references to other section topics
+    const otherTitles = allSectionTitles.filter(t => t !== fileInfo.title.toLowerCase());
+    const fileContentLower = fileContent.toLowerCase();
+    const hasCrossReferences = otherTitles.some(title => {
+      // Check if any word (>4 chars) from other section titles appears in this file
+      const significantWords = title.split(/\s+/).filter(w => w.length > 4);
+      return significantWords.some(word => fileContentLower.includes(word));
+    });
+
+    // Check for data points (numbers, percentages, statistics)
+    const hasData = /\b\d+(?:\.\d+)?%/.test(fileContent) ||
+      /\b(?:million|billion|trillion|thousand)\b/i.test(fileContent) ||
+      countMatches(fileContent, /\b\d{2,}\b/g) > 3;
+
+    const sectionFailures: string[] = [];
+    if (charCount < MIN_SECTION_CHARS) {
+      sectionFailures.push(`Too short (${charCount}/${MIN_SECTION_CHARS} chars)`);
+    }
+    if (lineCount < MIN_SECTION_LINES) {
+      sectionFailures.push(`Too few lines (${lineCount}/${MIN_SECTION_LINES} lines)`);
+    }
+    if (quality.evidenceScore < 0.45) {
+      sectionFailures.push(`Low evidence (${quality.evidenceScore.toFixed(2)}/0.45)`);
+    }
+    if (!hasData) {
+      sectionFailures.push("No data points (missing numbers, percentages, statistics)");
+    }
+    if (!hasCrossReferences && allSectionTitles.length > 1) {
+      sectionFailures.push("Missing cross-references to related sections");
+    }
+
+    const sectionResult: ReviewSectionResult = {
+      sectionIndex: fileInfo.sectionIndex,
+      title: fileInfo.title,
+      fileName: fileInfo.fileName,
+      charCount,
+      lineCount,
+      evidenceScore: quality.evidenceScore,
+      sectionCount,
+      hasCrossReferences,
+      hasData,
+      passed: sectionFailures.length === 0,
+      failures: sectionFailures,
+    };
+
+    if (sectionFailures.length === 0) {
+      passed.push(sectionResult);
+    } else {
+      failed.push(sectionResult);
+    }
+  }
+
+  layersExecuted.push("DISK:read_batch_files", "ANALYSIS:quality_review");
+
+  // Update outline sections based on review results
+  for (const p of passed) {
+    const outlineEntry = outline.find(s => s.sectionIndex === p.sectionIndex);
+    if (outlineEntry) {
+      outlineEntry.status = "passed";
+      outlineEntry.charCount = p.charCount;
+      outlineEntry.lineCount = p.lineCount;
+    }
+  }
+  for (const f of failed) {
+    const outlineEntry = outline.find(s => s.sectionIndex === f.sectionIndex);
+    if (outlineEntry && outlineEntry.status !== "passed") {
+      outlineEntry.status = "reviewed"; // reviewed but not passed
+    }
+  }
+
+  // Store updated outline and review results
+  store.setState(sessionId, "pipeline_outline", JSON.stringify(outline), "pipeline");
+  const reviewResults = { passed, failed, reviewedAt: new Date().toISOString() };
+  store.setState(sessionId, "pipeline_review_results", JSON.stringify(reviewResults), "pipeline");
+  layersExecuted.push("STATE:set_state");
+
+  results.reviewResults = {
+    passedCount: passed.length,
+    failedCount: failed.length,
+    totalReviewed: passed.length + failed.length,
+    passed: passed.map(s => ({ sectionIndex: s.sectionIndex, title: s.title, charCount: s.charCount, lineCount: s.lineCount })),
+    failed: failed.map(s => ({ sectionIndex: s.sectionIndex, title: s.title, failures: s.failures })),
+  };
+
+  const allPassed = failed.length === 0 && passed.length > 0;
+
+  const failureDetails = failed
+    .map(f => `  Section ${f.sectionIndex} "${f.title}": ${f.failures.join("; ")}`)
+    .join("\n");
+
+  return {
+    phase: "review",
+    layersExecuted,
+    results,
+    nextPhase: allPassed ? "analyze" : "gather (fix failed sections)",
+    directive: allPassed
+      ? `ALL REVIEW TESTS PASSED ✓ — ${passed.length} sections reviewed and passed. Proceed to analyze.`
+      : `REVIEW RESULTS: ${passed.length} passed, ${failed.length} failed.\n` +
+        `Failures:\n${failureDetails}\n` +
+        `Fix by searching and gathering for failed sections. Call gather with metadata.targetSection=N to APPEND depth — multiple gathers per section accumulate content like building a source file.`,
   };
 }
 
@@ -2161,69 +2502,29 @@ async function runFinalizePhase(
     importance: "high",
   });
   layersExecuted.push("MEMORY:memory_store");
-  results.stored = {
-    episodeId: storeResult.episodeId,
-    sentences: storeResult.sentenceCount,
-    facts: storeResult.factsExtracted,
-    graphNodes: storeResult.graphNodesAdded,
-  };
+  results.stored = true;
 
   // 2. memory_compact — compress and consolidate
   const compactResult = memory.compact(sessionId);
   layersExecuted.push("MEMORY:memory_compact");
-  results.compaction = {
-    integrity: {
-      totalFacts: compactResult.integrity.totalFacts,
-      retained: compactResult.integrity.retainedFacts,
-      lost: compactResult.integrity.lostFacts,
-      lossPercent: Number((compactResult.integrity.lossPercentage * 100).toFixed(4)),
-      verified: compactResult.integrity.verified,
-    },
-    compression: {
-      beforeChars: compactResult.compressionStats.beforeChars,
-      afterChars: compactResult.compressionStats.afterChars,
-      ratio: Number(compactResult.compressionStats.ratio.toFixed(2)),
-      sentencesProcessed: compactResult.compressionStats.sentencesProcessed,
-      unitsCreated: compactResult.compressionStats.unitsCreated,
-    },
-  };
+  // compaction stats used internally — not exposed to LLM output
 
-  // 3. memory_graph — query final knowledge graph structure
+  // 3. memory_graph queries used internally for file writing — not exposed to LLM
   const graphResults = memory.graph.associativeRecall(sessionId, finalSummary.slice(0, 1500), 2, 10);
   const graphStats = memory.graph.getStats(sessionId);
   layersExecuted.push("MEMORY:memory_graph");
-  results.knowledgeGraph = {
-    stats: graphStats,
-    topEntities: graphResults.slice(0, 10).map(r => ({
-      label: r.node.label,
-      type: r.node.type,
-      pageRank: Number(r.node.pageRank.toFixed(4)),
-    })),
-  };
 
-  // 4. memory_curate — get top curated entries
+  // 4. memory_curate — get top curated entries (used for file writing, not exposed to LLM)
   const topCurated = memory.curator.getTopEntries(sessionId, 20);
   layersExecuted.push("MEMORY:memory_curate");
-  results.curation = {
-    topEntries: topCurated.length,
-    entries: topCurated.slice(0, 5).map(e => ({
-      content: e.content.slice(0, 150),
-      importance: e.importance,
-    })),
-  };
 
   // 4b. get_history_summary — capture the conversation/history trace alongside the report export
   layersExecuted.push("STATE:get_history_summary");
   results.historySummary = historySummary;
 
-  // 5. memory_inspect — final status
+  // 5. memory status used internally — not exposed to LLM
   const finalStatus = memory.getStatus(sessionId);
   layersExecuted.push("MEMORY:memory_inspect");
-  results.finalMemoryState = {
-    tiers: finalStatus.tiers,
-    graph: finalStatus.graph,
-    compression: finalStatus.compression,
-  };
 
   // 6. context_loop — final pass
   recordLoopCall(sessionId);
@@ -2233,11 +2534,8 @@ async function runFinalizePhase(
     currentInput: "Research complete. Final verification.",
     lookbackTurns: 15,
   });
+  // final health check used internally for state management
   layersExecuted.push("ORCHESTRATOR:context_loop", "HEALTH:all_9_stages", "TRUTH:all_7_stages");
-  results.finalHealth = {
-    action: loopResult.action,
-    contextHealth: loopResult.directive.contextHealth,
-  };
 
   // 7. set_state — mark finalized
   store.setState(sessionId, "pipeline_phase", "finalized", "pipeline");
@@ -2405,9 +2703,6 @@ async function runFinalizePhase(
     results,
     nextPhase: null,
     directive: `Pipeline complete. ` +
-      `Memory: ${finalStatus.tiers.episodic.totalEpisodes ?? 0} episodes, ${graphStats.nodeCount ?? 0} graph nodes. ` +
-      `Compaction: ${compactResult.compressionStats.ratio.toFixed(1)}x, integrity=${compactResult.integrity.verified ? "OK" : "DEGRADED"}. ` +
-      `Final health: ${loopResult.directive.contextHealth ?? "N/A"}. ` +
       `Export: ${chunks.length} chunk(s) preserving ${manifest.totalGatherBatches} gathered batch(es), ${manifest.totalChars} total chars.` +
       filesSummary +
       verifyWarning,

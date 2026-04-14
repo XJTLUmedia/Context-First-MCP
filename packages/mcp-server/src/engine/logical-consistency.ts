@@ -2,6 +2,7 @@ import type {
   LogicalConsistencyResult,
   LogicalTransformation,
 } from "../state/types.js";
+import { compareTwoStrings } from "./nlp-utils.js";
 
 /**
  * Logical Consistency under Transformations — inspired by
@@ -610,14 +611,11 @@ function stripNegation(text: string): string {
 }
 
 function computeTokenSimilarity(a: string, b: string): number {
-  const aTokens = new Set(tokenize(a));
-  const bTokens = new Set(tokenize(b));
-  if (aTokens.size === 0 && bTokens.size === 0) return 1;
-  if (aTokens.size === 0 || bTokens.size === 0) return 0;
-
-  const intersection = [...aTokens].filter(t => bTokens.has(t)).length;
-  const union = new Set([...aTokens, ...bTokens]).size;
-  return union > 0 ? intersection / union : 0;
+  const aLower = a.toLowerCase();
+  const bLower = b.toLowerCase();
+  if (aLower.length === 0 && bLower.length === 0) return 1;
+  if (aLower.length === 0 || bLower.length === 0) return 0;
+  return compareTwoStrings(aLower, bLower);
 }
 
 function tokenize(text: string): string[] {

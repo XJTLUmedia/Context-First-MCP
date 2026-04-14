@@ -2,6 +2,13 @@ import type {
   SelfCritiqueResult,
   CritiqueIteration,
 } from "../state/types.js";
+import {
+  splitSentences,
+  tfidfCosineSimilarity,
+  removeHedgeWords,
+  removeFillers,
+  fleschKincaidGrade,
+} from "./nlp-utils.js";
 
 /**
  * Iterative Self-Critique — inspired by
@@ -245,12 +252,10 @@ function evaluateAccuracy(solution: string, context: string[]): CriterionResult 
     if (p.test(solution)) score -= 0.06;
   }
 
-  // Context alignment
+  // Context alignment via TF-IDF
   if (context.length > 0) {
-    const solutionTokens = new Set(tokenize(solution));
-    const contextTokens = context.flatMap(c => tokenize(c));
-    const overlap = contextTokens.filter(t => solutionTokens.has(t)).length;
-    const alignment = contextTokens.length > 0 ? overlap / contextTokens.length : 0;
+    const contextSims = context.map(c => tfidfCosineSimilarity(c, solution));
+    const alignment = contextSims.reduce((a, b) => a + b, 0) / context.length;
     score += alignment * 0.2;
   }
 
@@ -270,10 +275,8 @@ function evaluateAccuracy(solution: string, context: string[]): CriterionResult 
 function evaluateCompleteness(solution: string, question: string): CriterionResult {
   if (!question) return { score: 0.5, critique: null, improvement: null };
 
-  const questionTopics = extractTopicWords(question);
-  const solutionTokens = new Set(tokenize(solution));
-  const addressed = questionTopics.filter(t => solutionTokens.has(t)).length;
-  const coverage = questionTopics.length > 0 ? addressed / questionTopics.length : 0.5;
+  // Use TF-IDF similarity to measure how well solution covers the question
+  const coverage = tfidfCosineSimilarity(question, solution);
 
   // Length factor: very short answers are likely incomplete
   const words = solution.split(/\s+/).length;
@@ -285,6 +288,8 @@ function evaluateCompleteness(solution: string, question: string): CriterionResu
   let improvement: string | null = null;
 
   if (score < 0.6) {
+    const questionTopics = extractTopicWords(question);
+    const solutionTokens = new Set(tokenize(solution));
     const missed = questionTopics.filter(t => !solutionTokens.has(t));
     critique = `Completeness issue: topics possibly not addressed: ${missed.slice(0, 3).join(", ")}`;
     improvement = `Expand the response to cover: ${missed.slice(0, 3).join(", ")}`;
@@ -306,10 +311,17 @@ function evaluateClarity(solution: string): CriterionResult {
     if (p.test(solution)) score -= 0.05;
   }
 
-  // Sentence length: very long sentences reduce clarity
-  const sentences = solution.split(/(?<=[.!?])\s+/).filter(s => s.length > 0);
+  // Use Flesch-Kincaid readability grade
+  const grade = fleschKincaidGrade(solution);
+  // Grade 8-12 is optimal for most audiences
+  if (grade >= 8 && grade <= 12) score += 0.1;
+  else if (grade > 16) score -= 0.15;
+  else if (grade > 14) score -= 0.1;
+
+  // Use NLP sentence splitting for accurate avg length
+  const sentences = splitSentences(solution);
   const avgSentenceLength = sentences.length > 0
-    ? sentences.reduce((s, sent) => s + sent.split(/\s+/).length, 0) / sentences.length
+    ? solution.split(/\s+/).length / sentences.length
     : 0;
 
   if (avgSentenceLength > 30) score -= 0.15;
@@ -334,10 +346,7 @@ function evaluateClarity(solution: string): CriterionResult {
 }
 
 function evaluateConsistency(solution: string): CriterionResult {
-  const sentences = solution
-    .split(/(?<=[.!?])\s+/)
-    .map(s => s.trim())
-    .filter(s => s.length > 10);
+  const sentences = splitSentences(solution).filter(s => s.length > 10);
 
   let contradictions = 0;
   for (let i = 0; i < sentences.length; i++) {
@@ -365,14 +374,9 @@ function evaluateConsistency(solution: string): CriterionResult {
 function evaluateRelevance(solution: string, question: string): CriterionResult {
   if (!question) return { score: 0.5, critique: null, improvement: null };
 
-  let score = 0.5;
-
-  // Topic overlap
-  const qTokens = new Set(tokenize(question));
-  const sTokens = tokenize(solution);
-  const relevantCount = sTokens.filter(t => qTokens.has(t)).length;
-  const topicOverlap = sTokens.length > 0 ? relevantCount / sTokens.length : 0;
-  score = 0.3 + topicOverlap * 0.5;
+  // Use TF-IDF cosine similarity between question and solution
+  const topicSim = tfidfCosineSimilarity(question, solution);
+  let score = 0.3 + topicSim * 0.5;
 
   // Filler/off-topic markers
   for (const p of RELEVANCE_FILLERS) {
@@ -409,32 +413,93 @@ function simulateRefinement(
   solution: string,
   iteration: CritiqueIteration
 ): string {
-  // Simulate that each improvement round slightly improves the solution
-  // by appending improvement context (for scoring purposes in next iteration)
-  const improvements = iteration.refinements;
-  if (improvements.length === 0) return solution;
+  // Apply real text transformations based on critique findings.
+  // Each critique type maps to a concrete text operation.
+  let refined = solution;
 
-  // Add marker text that the scoring functions can detect as improvements
-  const addendum = improvements
-    .map(imp => {
-      // Convert improvement suggestions into text that improves scores
-      if (imp.includes("reference") || imp.includes("source")) {
-        return "According to established research, evidence supports this.";
+  for (const critique of iteration.critiques) {
+    switch (critique.aspect.toLowerCase()) {
+      case "accuracy": {
+        // Remove hedge words that weaken factual claims
+        refined = removeHedgeWords(refined);
+        break;
       }
-      if (imp.includes("expand") || imp.includes("cover")) {
-        return "Additionally, addressing these aspects provides more complete coverage.";
+      case "clarity": {
+        // Remove filler words and split overly long sentences
+        refined = removeFillers(refined);
+        const sentences = splitSentences(refined);
+        const result: string[] = [];
+        for (const s of sentences) {
+          const words = s.split(/\s+/);
+          if (words.length > 35) {
+            // Split at a conjunction or comma near the middle
+            const mid = Math.floor(words.length / 2);
+            const splitPoints = [",", "and", "but", "which", "while", "although"];
+            let splitIdx = -1;
+            for (let i = mid - 5; i <= mid + 5 && i < words.length; i++) {
+              if (i >= 0 && splitPoints.some(sp => words[i].replace(/,/g, "") === sp)) {
+                splitIdx = i;
+                break;
+              }
+            }
+            if (splitIdx > 0) {
+              const first = words.slice(0, splitIdx).join(" ").replace(/,\s*$/, "") + ".";
+              const rest = words.slice(splitIdx).join(" ").replace(/^(?:and|but|which)\s+/i, "");
+              result.push(first);
+              if (rest.trim().length > 0) {
+                result.push(rest.charAt(0).toUpperCase() + rest.slice(1));
+              }
+            } else {
+              result.push(s);
+            }
+          } else {
+            result.push(s);
+          }
+        }
+        refined = result.join(" ");
+        break;
       }
-      if (imp.includes("Break") || imp.includes("specific")) {
-        return "Specifically, this means the following concrete points.";
+      case "relevance": {
+        // Remove sentences with lowest relevance to the question
+        if (iteration.solution) {
+          const sentences = splitSentences(refined);
+          if (sentences.length > 3) {
+            // Keep sentences that have reasonable TF-IDF similarity with the bulk
+            const fullText = sentences.join(" ");
+            const scored = sentences.map(s => ({
+              sentence: s,
+              sim: tfidfCosineSimilarity(s, fullText),
+            }));
+            // Remove bottom 20% by similarity (likely off-topic)
+            scored.sort((a, b) => b.sim - a.sim);
+            const keepCount = Math.max(2, Math.ceil(scored.length * 0.8));
+            const kept = scored.slice(0, keepCount);
+            // Restore original order
+            kept.sort((a, b) => sentences.indexOf(a.sentence) - sentences.indexOf(b.sentence));
+            refined = kept.map(k => k.sentence).join(" ");
+          }
+        }
+        break;
       }
-      if (imp.includes("contradictory") || imp.includes("resolve")) {
-        return "To clarify, the consistent interpretation is as follows.";
+      case "consistency": {
+        // Detect and remove sentences that contradict the majority
+        const sentences = splitSentences(refined);
+        if (sentences.length > 2) {
+          const keep = sentences.filter((s, i) => {
+            const others = sentences.filter((_, j) => j !== i).join(" ");
+            return !detectContradiction(s, others);
+          });
+          if (keep.length >= sentences.length * 0.5) {
+            refined = keep.join(" ");
+          }
+        }
+        break;
       }
-      return "Furthermore, this specifically addresses the noted concern.";
-    })
-    .join(" ");
+      // completeness: we cannot invent new content, so skip
+    }
+  }
 
-  return `${solution} ${addendum}`;
+  return refined;
 }
 
 // ─── Contradiction Detection ───
